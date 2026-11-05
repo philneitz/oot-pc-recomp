@@ -2,7 +2,8 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-**OoT Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2, update 1.1.1, into a native Windows x86-64 application with a Vulkan renderer. There is no emulator at
+**OoT Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2, update 1.1.1
+, into a native Windows x86-64 application with a Vulkan renderer. There is no emulator at
 run time: the game's ARM64 code is translated to C ahead of time and compiled into one executable, `oot.exe`, and its
 graphics calls are answered by a host implementation of NVN 2.
 
