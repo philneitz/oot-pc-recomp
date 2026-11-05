@@ -45,14 +45,14 @@ Copie `amigos\totk.ini` para `build\dkb100` e use `amigos\jogar-dk.ps1`, como no
 ## 6. Se travar
 O log é `build\dkb100\logs\totk.log`. Copie antes de reabrir, porque a execução seguinte o renomeia.
 
-`device fault ... instruction pointer (invalid)` em uma placa NVIDIA é um problema conhecido e sem causa definida. Foi visto nas drivers 617.14, 617.42 e 621.01. `TOTK_PIPE_SYNC=1`, `TOTK_PIPE_WAIT=draw` e `TOTK_GPL=0` não resolveram na RTX 5090 testada.
+`device fault ... instruction pointer (invalid)` em uma placa NVIDIA é um problema conhecido e sem causa definida. Foi visto nas drivers 617.14, 617.42 e 621.01. `TOTK_PIPE_SYNC=1`, `TOTK_PIPE_WAIT=draw` e `TOTK_GPL=0` não resolveram na uma placa NVIDIA.
 
 Para investigar:
 1. Rode com `DKB_PAIR_LOG=1`. O log ganha uma linha `stage set:` a cada combinação nova de shaders.
 2. Os suspeitos são as últimas linhas antes da queda, não só a última, porque a GPU trabalha atrás do jogo.
 3. Teste por metades com `DKB_SKIP_STAGE=<hex>,<hex>`, no máximo 16 valores. Isso faz sumir o que esses shaders desenham, então peça à pessoa para dizer o que mudou na tela.
 
-A lista em `amigos\jogar-dk.ps1` só foi testada em uma RTX 5090, driver 617.14. Em AMD ou Intel, teste primeiro sem `DKB_SKIP_STAGE`.
+A lista em `amigos\jogar-dk.ps1` só foi testada em uma placa NVIDIA. Em AMD ou Intel, teste primeiro sem `DKB_SKIP_STAGE`.
 
 ## Sobre esta branch
 Ela junta os PRs #67, #68 e #72, ainda não aceitos, renumera o patch `0017` do #72 para `0018` (os dois PRs usavam o mesmo número) e adiciona o diagnóstico acima, além desta pasta. Quando eles entrarem no projeto, prefira o código oficial e mantenha só o que ainda fizer falta.

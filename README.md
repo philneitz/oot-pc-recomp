@@ -2,8 +2,7 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-**OoT Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2, update 1.1.1
-, into a native Windows x86-64 application with a Vulkan renderer. There is no emulator at
+**OoT Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2, update 1.1.1, into a native Windows x86-64 application with a Vulkan renderer. There is no emulator at
 run time: the game's ARM64 code is translated to C ahead of time and compiled into one executable, `oot.exe`, and its
 graphics calls are answered by a host implementation of NVN 2.
 
@@ -33,7 +32,7 @@ Open, most visible first:
 - **A grey veil from the fog pass**, and indirect light that looks flat next to the original. The cause is not known yet.
 - **Mesh draws are not replayed** (about 36 calls a frame in the first scene), which is probably why the gate and thick
   moss in Link's house are missing.
-- **Frame rate:** about 45 fps on that GPU since the last compute programs were enabled, down from about 60.
+- **Frame rate:** about 45 fps on that PC since the last compute programs were enabled, down from about 60.
 - **Camera jumps under GPU backlog:** `OOT_GPU_SYNC=1` stops them in the logs. It is a stopgap, and its cost is not
   measured yet.
 - **No neural upscaler:** a linear blit stands in for it, so the picture is softer than on the console.
@@ -103,8 +102,7 @@ This project stands on the work of others, and much of its code came from them u
 - **[TotK Recomp](https://github.com/valentderah/totk-pc-recomp)** by valentderah, for *Tears of the Kingdom*: the
   lifter, the Horizon host and the NVN and Vulkan runtime.
 - **[DKB Recomp](https://github.com/Lucas-blip-png/dkb-pc-recomp)** by Lucas-blip-png, for *Donkey Kong Bananza*: the step
-  to Switch 2, with NVN 2, Ampere shaders and the Switch 2 services. philneitz contributes there as well, and fixes from
-  that work are merged here. Its plan and notes are kept as history in
+  to Switch 2, with NVN 2, Ampere shaders and the Switch 2 services. Fixes from that work are merged here. Its plan and notes are kept as history in
   [docs/bananza-plan.md](docs/bananza-plan.md), [docs/bananza-shaders.md](docs/bananza-shaders.md) and
   [docs/dkb-testing.md](docs/dkb-testing.md); the DKB build path (`dkb100`) is still in the tree.
 - **[Chiuauaa/oot-pc-recomp](https://github.com/Chiuauaa/oot-pc-recomp)**: the Ocarina of Time port this fork is based

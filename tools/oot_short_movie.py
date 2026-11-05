@@ -1,6 +1,6 @@
 """Write a RomFS overlay with shortened copies of Ocarina of Time's cutscene videos, to reach gameplay faster in test runs.
 
-    python tools/oot_short_movie.py --romfs build/extracted/oot111/romfs --out build/oot111/romfs-test --seconds 5 Event/Movie/Dm_Kokiri_0000.webm
+    python tools/oot_short_movie.py --romfs build/extracted/oot111/romfs --out build/oot111/romfs-test --seconds 5 <movie path in the RomFS>
 
 Each copy keeps the clusters that start before --seconds: the header stays byte for byte except the Segment size and the
 Duration, and the SeekHead becomes a Void because its Cues are gone. The originals aren't touched. The overlay is game data:

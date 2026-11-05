@@ -181,7 +181,7 @@ the [roadmap issue](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10).
   `TOTK_PIPE_WAIT=draw`, as `--shot` does), 2 of 4 runs of 600 s still faulted around 7 minutes in, the same rate as
   with background builds. The vertex shader on the GPU changes from fault to fault
   ([#9](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/9)).
-- **Furthest point so far** (philneitz, by hand on an RTX 5090 Laptop): through the storm cutscene and the cave-in to
+- **Furthest point so far** (by hand): through the storm cutscene and the cave-in to
   the Ingot Isle Cave-In section, where dying and respawning stalled the GPU at about 0.1 FPS
   ([#10](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10)).
 - **Compute push constants land where the shaders read them** (#20, by monsterlag). NVN 2 packs a compute program's

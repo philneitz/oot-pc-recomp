@@ -32,6 +32,6 @@ Da pasta do repositório:
 Copy-Item amigos\totk.ini build\dkb100\totk.ini
 powershell -ExecutionPolicy Bypass -File amigos\jogar-dk.ps1
 ```
-A lista de shaders pulados só foi testada numa RTX 5090 (driver 617.14). Em AMD ou Intel, teste antes sem `DKB_SKIP_STAGE`.
+A lista de shaders pulados só foi testada numa placa NVIDIA. Em AMD ou Intel, teste antes sem `DKB_SKIP_STAGE`.
 
 Não compartilhe o `dkb.exe`, o código gerado, o cache de shaders nem o dump.
