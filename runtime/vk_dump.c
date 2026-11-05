@@ -749,6 +749,7 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
     Str b = {0};
     sp(&b, "vs %016llx fs %016llx prog %llu prim %d", (unsigned long long)shader_hash(s->vs),
        (unsigned long long)shader_hash(s->fs), (unsigned long long)(ex->prog ? ex->prog->serial : 0), s->prim);
+    sp(&b, " depth test %d write %d func %d alpha %d ref %.3f blend %#x", (int)s->ds.dt, (int)s->ds.dw, (int)s->ds.df, (int)s->color.alpha_func, s->alpha_ref, (unsigned)s->color.blend_en);
     for (uint32_t k = 0; ex->prog && k < ex->prog->nstage && k < 6; k++) {   // NVN 2 stages: their DKB_SHADER_DUMP names
         uint64_t o = nvn2_origin((const uint8_t *)(uintptr_t)ex->prog->sd[k].data);
         if (o) sp(&b, " nvn2 %016llx", (unsigned long long)o);

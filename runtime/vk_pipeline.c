@@ -3653,7 +3653,15 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
     vkCmdSetPrimitiveTopology(cb, vk_pipeline_topology(s->prim));
     vkCmdSetDepthTestEnable(cb, d->dt);
     vkCmdSetDepthWriteEnable(cb, d->dw);
-    vkCmdSetDepthCompareOp(cb, compare_op(d->df));
+    // OOT_DEPTH_EQ=always|lequal|gequal: replaces an EQUAL depth test, to see whether colour draws over a depth pre-pass
+    // fail it (holes in the colour image where the depth image is complete).
+    static int eq_mode = -1;
+    if (eq_mode < 0) {
+        const char *e = getenv("OOT_DEPTH_EQ");
+        eq_mode = !e ? 0 : !strcmp(e, "always") ? NVN_DEPTH_FUNC_ALWAYS : !strcmp(e, "lequal") ? NVN_DEPTH_FUNC_LEQUAL : !strcmp(e, "gequal") ? NVN_DEPTH_FUNC_GEQUAL : 0;
+        if (eq_mode) rt_log("vk_pipeline: OOT_DEPTH_EQ: an EQUAL depth test becomes %s", e);
+    }
+    vkCmdSetDepthCompareOp(cb, compare_op(eq_mode && d->df == NVN_DEPTH_FUNC_EQUAL ? (unsigned)eq_mode : d->df));
     vkCmdSetStencilTestEnable(cb, d->st);
     vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, stencil_op(d->fail_f), stencil_op(d->zpass_f), stencil_op(d->zfail_f),
                       compare_op(d->sf_f));
