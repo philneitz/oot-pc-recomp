@@ -261,6 +261,18 @@ static class SwshXlate
         public bool QueryHasUnalignedStorageBuffer() => _job["sbuf_align"] is JsonNode;
         public bool QueryStorageBufferRuntimeCandidates() => StorageCandidatesVersion == 1;
         public bool QueryHostSupportsStorageBufferArrayLength() => true;
+        public int QueryStorageBufferCandidateCount() => QueryStorageBufferRuntimeCandidates() &&
+            _job["c0"] is JsonArray counts ? (int)counts[1] + (int)counts[2] : 0;
+        public int QueryStorageBufferCandidateOffset(int index)
+        {
+            int count = QueryStorageBufferCandidateCount();
+            if ((uint)index >= (uint)count || _job["c0"] is not JsonArray counts)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            // Compute bank 0 stores both buffer tables after the root tables. UBO and SSBO records are
+            // contiguous, so enumerate both as guarded candidates for indirect global pointers.
+            return (16 + _rootBytes + 16 * index) / 4;
+        }
         public int QueryHostStorageBufferOffsetAlignment() => _job["sbuf_align"] is JsonNode n ? (int)n : 16;
         // "subgroup": n: lanes per subgroup when the host cannot pin 32 (AMD GCN/Vega run 64): ballots and votes span n lanes.
         public int QueryHostSubgroupSize() => _job["subgroup"] is JsonNode n ? (int)n : 32;
