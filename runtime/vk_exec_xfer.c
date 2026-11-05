@@ -116,9 +116,17 @@ static void counter_cb(void *arg) {
 
 // Reports queued by the replay that the GPU has not finished. The condition of RENDER_COND reads a timestamp one as 0
 // and a samples-passed one as unknown.
-#define PENDING 256
+// A table by address, not a ring of the last few: Ocarina of Time reports about 800 times a frame and conditions its colour
+// draws on reports of its depth pass, so a ring of 256 forgot them while they were still running. The condition then read
+// an older query's count from memory, often 0, and dropped a draw whose depth was already in the frame: a hole that
+// showed the sky, and the bloom of that sky was the white flicker. A slot is free again once its report is done.
+#define PENDING (1u << 16)
+#define PENDING_PROBE 32u
 static struct { uint64_t addr, fence; int unknown; } pending[PENDING];
-static unsigned pending_head;
+static uint64_t pending_overflow;              // replay: newest fence of a report no slot could hold; until done all read as unknown
+static volatile uint64_t oq_written_fence;     // completion thread: samples-passed values of submissions before this one are in memory
+
+static unsigned pending_slot(uint64_t addr) { return (unsigned)(((addr >> 4) * 0x9E3779B97F4A7C15ull) >> 48); }
 
 // ---- occlusion counts (samples passed)
 //
@@ -329,6 +337,8 @@ static void oq_cb(void *arg) {
         }
         if (s->addr) write_counter(s->addr, out);
     }
+    // Segments arrive in submit order: everything of submissions before this one is written, this one's not all yet.
+    if (s->fence) __atomic_store_n(&oq_written_fence, s->fence - 1, __ATOMIC_RELEASE);
     free(s);
 }
 
@@ -388,7 +398,15 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
         *a = (CounterWrite){p->addr, ex->submitted_ticks};
         vk_completion_add(ex->fence, counter_cb, a);
     }
-    pending[pending_head++ % PENDING] = (typeof(pending[0])){p->addr, ex->fence, samples};
+    uint64_t done = vk_sync_fence_done();
+    unsigned at = pending_slot(p->addr), slot = PENDING;
+    for (unsigned k = 0; k < PENDING_PROBE; k++) {
+        unsigned i = (at + k) % PENDING;
+        if (pending[i].addr == p->addr) { slot = i; break; }   // the last report to addr decides
+        if (slot == PENDING && pending[i].fence <= done) slot = i;
+    }
+    if (slot == PENDING) pending_overflow = ex->fence;
+    else pending[slot].addr = p->addr, pending[slot].fence = ex->fence, pending[slot].unknown = samples;
 }
 
 // ---- conditional rendering
@@ -396,9 +414,19 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
 // 1: *v read, 0: not readable, 2: a samples-passed report not done yet (unknown)
 static int counter_word(uint64_t addr, uint64_t *v) {
     uint64_t done = vk_sync_fence_done();
-    for (unsigned k = 1; k <= PENDING; k++) {   // newest first: the last report to addr decides
-        unsigned i = (pending_head - k) % PENDING;
-        if (pending[i].addr == addr && pending[i].fence > done) return *v = 0, pending[i].unknown ? 2 : 1;
+    if (pending_overflow > done) return *v = 0, 2;
+    unsigned at = pending_slot(addr);
+    for (unsigned k = 0; k < PENDING_PROBE; k++) {
+        unsigned i = (at + k) % PENDING;
+        if (pending[i].addr != addr) continue;
+        // A count is in memory only after the completion thread wrote it, which can be a moment after the fence.
+        uint64_t in_memory = done;
+        if (pending[i].unknown) {
+            uint64_t w = __atomic_load_n(&oq_written_fence, __ATOMIC_ACQUIRE);
+            if (w < in_memory) in_memory = w;
+        }
+        if (pending[i].fence > in_memory) return *v = 0, pending[i].unknown ? 2 : 1;
+        break;
     }
     VkMemSpan m;
     if (nvn_gpu_only(addr) || !vk_mem_resolve(addr, sizeof *v, &m)) return 0;
