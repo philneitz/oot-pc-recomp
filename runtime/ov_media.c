@@ -64,7 +64,13 @@ static void ov_work_size(Cpu *c) {
 static void ov_initialize(Cpu *c) {
     uint64_t guest = arg_x(c, 0), size = arg_x(c, 4);
     int rate = (int)arg_x(c, 1), channels = (int)arg_x(c, 2);
-    if (!guest || !valid_format(rate, channels) || size < OPUS_WORK_SIZE) { ret_x(c, CODEC_R_INVALID); return; }
+    static int32_t told_init;
+    if (told_init < 12) {
+        told_init++;
+        rt_log("nn::codec: InitializeHardwareOpusDecoder %#llx rate %d channels %d work %llu option %d", (unsigned long long)guest, rate, channels,
+               (unsigned long long)size, (int)arg_x(c, 5));
+    }
+    if (!guest || !valid_format(rate, channels) || size < OPUS_WORK_SIZE) { rt_log("nn::codec: that initialize is refused"); ret_x(c, CODEC_R_INVALID); return; }
     OpusDecoder *fresh = opus_new(rate, channels);
     plat_mutex_lock(&lock);
     Decoder *d = decoders;
@@ -144,9 +150,24 @@ static void ov_decode(Cpu *c) {
     int *samples = arg_p(c, 2);
     int16_t *out = arg_p(c, 3);
     const uint8_t *in = arg_p(c, 5);
-    if (!consumed || !samples || !out || !in || in_size < 8) { ret_x(c, CODEC_R_INVALID); return; }
+    static int32_t told_dec, told_bad;
+    if (told_dec < 6) {
+        told_dec++;
+        rt_log("nn::codec: Opus decode: out %llu bytes, in %llu bytes, first bytes %02x %02x %02x %02x %02x %02x %02x %02x %02x", (unsigned long long)out_size,
+               (unsigned long long)in_size, in && in_size >= 9 ? in[0] : 0, in && in_size >= 9 ? in[1] : 0, in && in_size >= 9 ? in[2] : 0, in && in_size >= 9 ? in[3] : 0,
+               in && in_size >= 9 ? in[4] : 0, in && in_size >= 9 ? in[5] : 0, in && in_size >= 9 ? in[6] : 0, in && in_size >= 9 ? in[7] : 0, in && in_size >= 9 ? in[8] : 0);
+    }
+    if (!consumed || !samples || !out || !in || in_size < 8) {
+        if (told_bad++ < 10) rt_log("nn::codec: Opus decode refused: null argument or %llu bytes in", (unsigned long long)in_size);
+        ret_x(c, CODEC_R_INVALID);
+        return;
+    }
     uint32_t n = be32(in), range = be32(in + 4);
-    if (n > in_size - 8 || n > INT_MAX) { ret_x(c, CODEC_R_INVALID); return; }
+    if (n > in_size - 8 || n > INT_MAX) {
+        if (told_bad++ < 10) rt_log("nn::codec: Opus decode refused: packet size %u, in %llu bytes", n, (unsigned long long)in_size);
+        ret_x(c, CODEC_R_INVALID);
+        return;
+    }
     Decoder *d = acquire(guest, "DecodeOpusInterleavedWithHardware");
     size_t capacity = out_size / (sizeof(int16_t) * (size_t)d->channels);
     if (capacity > INT_MAX) { release(d); ret_x(c, CODEC_R_INVALID); return; }

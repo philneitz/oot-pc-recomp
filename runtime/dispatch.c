@@ -14,6 +14,7 @@
 #include "host.h"
 #include "platform/platform.h"
 
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,6 +104,41 @@ static void *table_alloc(uint64_t bytes) {
 
 static void table_seal(void *p, uint64_t bytes) {
     if (!plat_mem_protect((uint64_t)(uintptr_t)p, bytes, PLAT_PROT_READ)) rt_fatal("dispatch: sealing the table failed");
+}
+
+// ---- guest setjmp/longjmp (Ocarina of Time)
+// Lifted functions keep the host stack, so the guest longjmp's "br x30" to a point after a setjmp call has nothing to
+// jump to and the frames above it would still be live. The setjmp calls in OoT's main (tools/oot_setjmp_lift.py edits
+// their lifted callers) also take a host setjmp; the guest longjmp restores the guest registers as usual and its branch
+// lands in setjmp_return below, which unwinds the host stack to that caller. Entries are found by the guest sp at setjmp.
+static const uint64_t OOT_SETJMP_RETURNS[] = {0x700165ab04ull, 0x7001661690ull, 0x7002365274ull};   // main's return points
+#define SJ_MAX 32
+#define SJ_SAME_STACK (16ull << 20)
+typedef struct { uint64_t sp; jmp_buf jb; } SjEntry;
+static _Thread_local SjEntry sj[SJ_MAX];
+static _Thread_local int nsj;
+
+void *rt_setjmp_push(Cpu *c) {
+    // Frames at or below this sp on this stack have returned. Other fibers' stacks are far away and stay.
+    while (nsj > 0 && sj[nsj - 1].sp <= c->sp && c->sp - sj[nsj - 1].sp < SJ_SAME_STACK) nsj--;
+    if (nsj == SJ_MAX) rt_fatal("guest setjmp: more than %d live frames", SJ_MAX);
+    sj[nsj].sp = c->sp;
+    return &sj[nsj++].jb;
+}
+
+static void setjmp_return(Cpu *c) {
+    for (int i = nsj - 1; i >= 0; i--)
+        if (sj[i].sp == c->sp) {
+            nsj = i + 1;
+            static int told;
+            if (told < 5) {
+                told++;
+                rt_log("guest longjmp to main+%#llx: value %#llx, sp %#llx (logged up to 5 times)",
+                       (unsigned long long)(c->pc - 0x7000000000ull), (unsigned long long)c->x[0], (unsigned long long)c->sp);
+            }
+            longjmp(sj[i].jb, 1);
+        }
+    rt_fatal("guest longjmp: no live setjmp frame for sp %#llx", (unsigned long long)c->sp);
 }
 
 void rt_dispatch_init(const RtModule *mods, int count) {
@@ -195,6 +231,9 @@ __attribute__((noinline, noreturn, cold)) static void dispatch_fail(Cpu *c) {
 // Host functions, and the fatal error. A separate tail call keeps the fast path below free of a stack frame.
 __attribute__((noinline)) static void dispatch_slow(Cpu *c) {
     GuestFn f = g_ready ? host_lookup(c->pc) : NULL;
+    if (!f)   // no function starts at a setjmp return point, so the flat table misses there
+        for (size_t i = 0; i < sizeof OOT_SETJMP_RETURNS / sizeof *OOT_SETJMP_RETURNS; i++)
+            if (c->pc == OOT_SETJMP_RETURNS[i]) setjmp_return(c);
     if (!f) dispatch_fail(c);
     __attribute__((musttail)) return f(c);
 }
