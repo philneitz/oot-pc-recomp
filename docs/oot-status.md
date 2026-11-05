@@ -1,6 +1,6 @@
 # Ocarina of Time port: status and findings
 
-Newest first. Title 0400486024DEC000, update 1.1.1, build `oot111`.
+Newest first. Update 1.1.1, build `oot111`.
 
 ## 5 November 2026 (afternoon): the world renders on Linux
 
@@ -16,9 +16,17 @@ Newest first. Title 0400486024DEC000, update 1.1.1, build `oot111`.
   (jemalloc profile: `nvvm` / `nvGetCompilerInterface`), so the process passed 10 GB and the PC ran out of memory.
   An RTX 5080 on Windows absorbs it. Without the patches that shader is skipped again; the enumeration can come back
   with a bound on candidates or with compute pipeline builds off the replay thread.
-- **Still open: the world's light is blown out and flickers.** The scene is already white in the HDR target before
-  bloom and upscale (Zuriel's capture and ours). Leads: GPU-computed values whose compute passes are skipped
-  (exposure, 128x72x96 light volumes: 64-bit atomics the translator rejects), and mesh draws.
+- **Fixed: the world's white flicker and holes.** Colour draws are conditioned on samples-passed reports of the depth
+  pass. The pending list held 256 reports against about 800 a frame, so a running report was forgotten and the condition
+  read an older count, often 0: the colour draw was dropped over depth already in the frame, and the bloom of the sky
+  showing through was the white. Pending reports now sit in a table by address.
+- **Camera going back and forth, under GPU backlog:** the game rewrites its view blocks with no fence and overtakes a
+  late replay. `OOT_GPU_SYNC=1` (a wait at each present) stops it in the logs; a proper fix is still open.
+- **Still open: a grey veil and flat indirect light.** Dropping the fog composite (`OOT_SKIP_STAGE`) removes the veil,
+  so it comes from there; why the fog's even part is so strong is not known. The compute programs the translator
+  refused were not 64-bit atomics, as this file said before: they use floating point add reductions and sub-word global
+  loads, which patch 0025 handles. With them running the frame rate fell to about 45 fps on a fast NVIDIA GPU,
+  and whether their sums reach the buffers they mean to is not verified.
 - **Mesh draws are not replayed at all.** `DrawMeshTasks*` are accepted and dropped (nvn_api_nvn2.c); there is no
   `VK_EXT_mesh_shader` path, and a GTX 1070 has none. `OOT_MESH_LOG=1` found ~30 programs (4034-4095) drawing through
   `DrawMeshTasksIndirect` from the title on, with a mesh stage in the vertex slot, a fragment stage, and in some a
