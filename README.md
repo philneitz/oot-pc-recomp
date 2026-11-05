@@ -36,7 +36,8 @@ Open, most visible first:
 - **Camera jumps under GPU backlog:** `OOT_GPU_SYNC=1` stops them in the logs. It is a stopgap, and its cost is not
   measured yet.
 - **No neural upscaler:** a linear blit stands in for it, so the picture is softer than on the console.
-- A crash in the first seconds on about a third of starts. Restarting works; the cause is open.
+- A startup crash was traced to cross-thread fiber ownership and repaired. The migration regression and sixteen bounded
+  startup checks pass; long-session stability remains unverified ([investigation](docs/oot-startup-fibers.md)).
 
 Findings as they come in: [docs/oot-status.md](docs/oot-status.md) and
 [docs/oot-rendering-investigation.md](docs/oot-rendering-investigation.md).

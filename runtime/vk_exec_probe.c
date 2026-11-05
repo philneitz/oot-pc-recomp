@@ -845,6 +845,63 @@ static int test_mirror(const GfxBackend *b, uint8_t *guest, int *bytes) {
     return 0;
 }
 
+// A uniform binding survives a submission boundary even when the following stream contains no bind op.
+typedef struct { uint64_t addr; int inherited, dropped; } SnapshotProbe;
+
+static void snapshot_probe_work(VkExec *ex, void *context) {
+    SnapshotProbe *p = context;
+    VkDescriptorBufferInfo bi;
+    p->inherited = vk_usnap_find(p->addr, 64, 256, &bi);
+    vk_usnap_drop(p->addr, 64);
+    p->dropped = !vk_usnap_find(p->addr, 64, 256, &bi);
+    (void)ex;
+}
+
+static int snapshot_probe_record(VkCommandBuffer cb, uint64_t fence, uint64_t ticks, void *context) {
+    return vk_exec_record_work(cb, fence, ticks, snapshot_probe_work, context);
+}
+
+int probe_vkusnap(void) {
+    const GfxBackend *b = &gfx_vulkan_backend;
+    uint64_t heap;
+    CHECK(mem_set_heap_size(4ull << 20, &heap) == 0 && heap, "snapshot probe heap");
+    pool_t pool = {.magic = NVN_POOL_MAGIC, .flags = 0x22, .mem = (uint8_t *)(uintptr_t)heap,
+                   .game_mem = (uint8_t *)(uintptr_t)heap, .size = 0x100000};
+    CHECK(b->pool_init(&pool), "snapshot probe pool");
+    SnapshotProbe p = {.addr = heap + 0x1000};
+    memset((void *)(uintptr_t)p.addr, 0x31, 64);
+    _Alignas(8) uint8_t stream[256];
+    uint8_t *end = put(stream, OP_BEGIN, NULL, 0);
+    p_bind_buf bind = {0, 0, p.addr, 64};
+    end = put(end, OP_BIND_UBO, &bind, sizeof bind);
+    put(end, OP_END, NULL, 0);
+    uint64_t handle = (uint64_t)(uintptr_t)stream;
+    uint64_t fence = b->submit(&handle, 1, rt_ticks());
+    CHECK(b->fence_wait(fence, 5000000000ull), "initial snapshot binding fence");
+    for (int i = 0; i < 2; i++) {
+        p.inherited = p.dropped = 0;
+        fence = vk_sync_submit_record(snapshot_probe_record, &p, rt_ticks());
+        CHECK(b->fence_wait(fence, 5000000000ull), "inherited snapshot fence");
+        CHECK(p.inherited && p.dropped, "inherited uniform snapshot pass %d: copied %d, GPU write invalidated %d",
+              i, p.inherited, p.dropped);
+    }
+    end = put(stream, OP_BEGIN, NULL, 0);
+    bind.addr = bind.size = 0;
+    end = put(end, OP_BIND_UBO, &bind, sizeof bind);
+    put(end, OP_END, NULL, 0);
+    fence = b->submit(&handle, 1, rt_ticks());
+    CHECK(b->fence_wait(fence, 5000000000ull), "snapshot unbind fence");
+    b->pool_fini(&pool);
+    b->finish();
+    vk_pipeline_shutdown();
+    vk_exec_draw_shutdown();
+    vk_exec_xfer_shutdown();
+    vk_backend_shutdown();
+    CHECK(!vk_validation_errors_total(), "snapshot probe validation errors");
+    printf("probe-vkusnap: passed (inherited binding snapshotted twice without rebinding; GPU writes invalidate the copy)\n");
+    return 0;
+}
+
 int probe_vkexec(void) {
     layouts_equal = 0;
     main_tid = plat_thread_id();

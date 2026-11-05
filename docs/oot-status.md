@@ -2,6 +2,22 @@
 
 Newest first. Update 1.1.1, build `oot111`.
 
+## 5 November 2026 (evening): startup fiber ownership
+
+- **Fixed a reproducible cross-thread fiber failure.** Native fiber continuations retained their original thread
+  pointer and restored host-call depth through it after migrating. The switch path now reloads TLS, and host/SVC
+  wrappers finish on the resumed Cpu's current owner. The new 40-handoff migration regression crashes before the
+  fix and passes afterward; selftest and the complete kernel probe pass. Sixteen bounded ordinary startup windows
+  (ten of 15 seconds, six of 25 seconds) have no reported failure. Longer sessions remain to be checked.
+  See [startup investigation](oot-startup-fibers.md).
+- **More complete crash reports.** Unhandled native returns into heap or unmapped memory now reach the Windows
+  final-chance reporter. Native registers/stack words and failed guest-dispatch contexts are logged.
+- **Inherited uniform bindings now get snapshots.** Replay keeps bindings across submissions, but the collector
+  only saw newly recorded bind commands. It now includes the existing bindings too. The real-Vulkan
+  `--probe-vkusnap` regression fails before this change and passes afterward. Full visual camera validation remains
+  open; `OOT_GPU_SYNC=1` stays in the launcher. See [snapshot investigation](oot-camera-snapshots.md).
+- The camera/GPU synchronization, mesh, fog/lighting and performance work below remains open.
+
 ## 5 November 2026 (afternoon): the world renders on Linux
 
 - **State:** Zuriel-Zurichi's `fix/oot-rendering-3d` (c3ad87b: NVN view formats, RGB9E5, followed-texture formats,

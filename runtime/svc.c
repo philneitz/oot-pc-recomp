@@ -148,6 +148,8 @@ void rt_svc(Cpu *c, uint32_t imm, uint64_t pc) {
     int *d = kern_host_depth(t);
     __atomic_store_n(d, *d + 1, __ATOMIC_RELAXED);
     svc_body(c, imm, pc);
+    t = c->thread;
+    d = kern_host_depth(t);
     int n = *d - 1;
     __atomic_store_n(d, n, __ATOMIC_RELAXED);
     if (!n && kern_preempt_pending(t)) kern_host_left(t);

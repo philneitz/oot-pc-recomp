@@ -127,6 +127,9 @@ __attribute__((noinline)) static void hostfn_tracked(Cpu *c, GuestFn fn) {
     int *d = kern_host_depth(t);
     __atomic_store_n(d, *d + 1, __ATOMIC_RELAXED);
     fn(c);
+    // A guest fiber switch may have resumed this host call on a different thread.
+    t = c->thread;
+    d = kern_host_depth(t);
     int n = *d - 1;
     __atomic_store_n(d, n, __ATOMIC_RELAXED);
     if (!n && kern_preempt_pending(t)) kern_host_left(t);

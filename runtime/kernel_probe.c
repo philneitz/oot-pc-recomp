@@ -27,6 +27,7 @@ static int failures;
 static uint64_t a_lock_waiter, a_cv_waiter, a_cv_order_waiter, a_arb_waiter, a_event_waiter, a_core_worker,
     a_exit_entry, a_exit_nested, a_fiber_fn, a_fiber_exit_thread, a_fiber_exit_fn, a_tick_worker;
 static uint64_t a_fib_init, a_fib_fin, a_fib_switch, a_fib_cur, tick_stub;
+static uint64_t a_migration_fiber, a_migration_worker;
 
 // ---- helpers: SVCs through rt_svc, thread start and join
 static uint32_t sv(Cpu *c, uint32_t imm, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
@@ -314,8 +315,12 @@ static void test_arbiter(Cpu *c) {
     uint32_t r = sv(c, 0x34, arb, 2, 5, 5000000);
     double ms = ms_since(t0);
     CHECK(r == KERN_R_TIMEOUT && ms >= 5.0, "wait type 2 with a 5 ms timeout: %#x after %.2f ms", r, ms);
-    CHECK(sv(c, 0x34, arb, 3, 0, 0) == KERN_R_INVALID_ENUM && sig(c, 3, 0, 0) == KERN_R_INVALID_ENUM, "type 3");
-    printf("address arbiter: wait types 0-2 (less, decrement-less, equal), signal types 0-2 (wake, increment, modify by "
+    uint64_t wide = 0x100000001ull;
+    CHECK(sv(c, 0x34, ga(&wide), 3, wide, 0) == KERN_R_TIMEOUT, "64-bit equal wait with timeout 0");
+    CHECK(sv(c, 0x34, ga(&wide), 3, 1, 0) == KERN_R_BAD_STATE, "64-bit equal wait compares the upper word");
+    CHECK(sv(c, 0x34, arb, 4, 0, 0) == KERN_R_INVALID_ENUM && sig(c, 3, 0, 0) == KERN_R_INVALID_ENUM,
+          "invalid wait type 4 and signal type 3");
+    printf("address arbiter: wait types 0-3 (less, decrement-less, equal, equal64), signal types 0-2 (wake, increment, modify by "
            "waiters), 5 ms timeout after %.2f ms: %s\n", ms, failures == before ? "ok" : "FAIL");
 }
 
@@ -493,6 +498,60 @@ static void test_fibers(Cpu *c) {
     CHECK(ok, "fiber ping-pong");
 }
 
+// A suspended fiber moves between two native threads. Unlike ping-pong on one thread, this exercises TLS
+// reloads and the ownership of host-call depth when a saved host call returns on a different thread.
+enum { MIGRATION_TURNS = 40 };
+typedef struct {
+    uint64_t fiber;
+    volatile uint32_t turn, bad;
+    void *owner;
+    uint64_t tlr;
+    uint32_t tid;
+} Migration;
+typedef struct { Migration *shared; uint32_t id; } MigrationWorker;
+
+static void migration_fiber(Cpu *c) {
+    Migration *m = arg_p(c, 0);
+    for (int i = 0; i < MIGRATION_TURNS; i++) {
+        if (kern_cpu() != c || c->thread != m->owner || c->tpidrro != m->tlr || plat_thread_id() != m->tid)
+            __atomic_add_fetch(&m->bad, 1, __ATOMIC_RELAXED);
+        rt_call(c, a_fib_switch, 1, (uint64_t)0);
+    }
+    c->x[0] = 0;   // returning is also a switch to the current thread's base context
+}
+
+static void migration_worker(Cpu *c) {
+    MigrationWorker *w = arg_p(c, 0);
+    Migration *m = w->shared;
+    for (uint32_t i = w->id; i < MIGRATION_TURNS; i += 2) {
+        while (__atomic_load_n(&m->turn, __ATOMIC_ACQUIRE) != i) sleep_ms(c, 1);
+        m->owner = c->thread, m->tlr = c->tpidrro, m->tid = plat_thread_id();
+        int depth = *kern_host_depth(c->thread);
+        rt_call(c, a_fib_switch, 1, m->fiber);
+        if (kern_cpu() != c || *kern_host_depth(c->thread) != depth)
+            __atomic_add_fetch(&m->bad, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&m->turn, i + 1, __ATOMIC_RELEASE);
+    }
+    exit_thread(c);
+}
+
+static void test_fiber_migration(Cpu *c) {
+    Migration m = {.fiber = ga(mem_kernel_alloc(0x100, 16))};
+    uint64_t stack = ga(mem_kernel_alloc(STACK, 16));
+    rt_call(c, a_fib_init, 6, m.fiber, a_migration_fiber, ga(&m), stack, (uint64_t)STACK, (uint64_t)0);
+    MigrationWorker workers[2] = {{&m, 0}, {&m, 1}};
+    uint32_t threads[2];
+    for (int i = 0; i < 2; i++) threads[i] = create(c, a_migration_worker, &workers[i], 44, -2);
+    for (int i = 0; i < 2; i++) start(c, threads[i]);
+    for (int i = 0; i < 2; i++) join(c, threads[i]);
+    int depth = *kern_host_depth(c->thread);
+    rt_call(c, a_fib_switch, 1, m.fiber);   // let the fiber return on a third thread, after its first owners ended
+    if (kern_cpu() != c || *kern_host_depth(c->thread) != depth) m.bad++;
+    rt_call(c, a_fib_fin, 1, m.fiber);
+    printf("fiber migration: %u handoffs, %u context/depth mismatches: %s\n", m.turn, m.bad, m.bad ? "FAIL" : "ok");
+    CHECK(m.turn == MIGRATION_TURNS && !m.bad, "cross-thread fiber migration");
+}
+
 // ---- ExitThread unwinding: from three nested host calls deep, and from a fiber
 typedef struct { int stage, depth, bad; uint64_t fiber, stack; } ExitJob;
 
@@ -621,6 +680,7 @@ static void probe_main(Cpu *c) {
     test_events(c);
     test_cores(c);
     test_fibers(c);
+    test_fiber_migration(c);
     test_exit(c);
     test_lifted_ticks(c);
     test_exit_process(c);
@@ -693,6 +753,8 @@ int probe_kernel(void) {
     a_exit_entry = hostfn_register("probe-kernel exit entry", exit_entry);
     a_exit_nested = hostfn_register("probe-kernel exit nested", exit_nested);
     a_fiber_fn = hostfn_register("probe-kernel fiber", fiber_fn);
+    a_migration_fiber = hostfn_register("probe-kernel migrating fiber", migration_fiber);
+    a_migration_worker = hostfn_register("probe-kernel migration worker", migration_worker);
     a_fiber_exit_thread = hostfn_register("probe-kernel fiber exit thread", fiber_exit_thread);
     a_fiber_exit_fn = hostfn_register("probe-kernel fiber exit", fiber_exit_fn);
     a_tick_worker = hostfn_register("probe-kernel tick worker", tick_worker);

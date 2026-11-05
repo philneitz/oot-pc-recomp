@@ -205,7 +205,8 @@ _Noreturn void plat_reexec(void);
 // overflow) goes to fn, which reports it and must end the process. Faults in other modules (drivers) are left to the
 // OS. The write-fault hook above runs first. On Windows abort() (a failed assert, std::terminate) and an invalid
 // parameter to a C runtime function go there too, with the host frames in this executable: the C runtime ends the
-// process for both with 0xc0000409 and no exception.
+// process for both with 0xc0000409 and no exception. On Windows an unhandled-exception fallback also reports faults
+// outside this executable after the driver's own handlers had their chance, including invalid native returns.
 typedef struct {
     const char *what;          // "access violation", "illegal instruction", ...
     uint32_t code;             // the Windows exception code or the signal number
@@ -214,6 +215,8 @@ typedef struct {
     uint64_t addr;             // its address when access >= 0
     int nframes;               // abort and invalid parameter: return addresses in this executable, innermost first
     uintptr_t frames[16];      // (rip is frames[0]); 0 for a fault, whose rip is exact
+    int has_registers;         // a synchronous x86-64 fault supplied the host GPRs below
+    uint64_t registers[16];    // rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8-r15
 } PlatCrash;
 void plat_crash_hook(void (*fn)(const PlatCrash *c));
 int plat_mem_read(uint64_t addr, void *out, size_t n);    // copies n bytes, 0 instead of faulting on unmapped memory

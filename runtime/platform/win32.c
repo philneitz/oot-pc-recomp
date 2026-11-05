@@ -563,7 +563,7 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
 
 static void (*crash_fn)(const PlatCrash *c);
 
-static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
+static LONG report_exception(EXCEPTION_POINTERS *ep, int own_only) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     const char *what = code == EXCEPTION_ACCESS_VIOLATION ? "access violation"
                      : code == EXCEPTION_ILLEGAL_INSTRUCTION ? "illegal instruction"
@@ -574,15 +574,27 @@ static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
     if (!what) return EXCEPTION_CONTINUE_SEARCH;
     uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
     MODULEINFO mi;
-    if (!GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(NULL), &mi, sizeof mi) ||
-        rip - (uintptr_t)mi.lpBaseOfDll >= mi.SizeOfImage)
+    if (!GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(NULL), &mi, sizeof mi))
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (own_only && rip - (uintptr_t)mi.lpBaseOfDll >= mi.SizeOfImage)
         return EXCEPTION_CONTINUE_SEARCH;   // not our code: leave it to the handler that expects it
     PlatCrash c = {what, (uint32_t)code, rip, rip - (uintptr_t)mi.lpBaseOfDll, -1, 0};
+    const CONTEXT *r = ep->ContextRecord;
+    const uint64_t registers[16] = {r->Rax, r->Rcx, r->Rdx, r->Rbx, r->Rsp, r->Rbp, r->Rsi, r->Rdi,
+                                    r->R8, r->R9, r->R10, r->R11, r->R12, r->R13, r->R14, r->R15};
+    memcpy(c.registers, registers, sizeof registers);
+    c.has_registers = 1;
     if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
         c.access = (int)ep->ExceptionRecord->ExceptionInformation[0], c.addr = ep->ExceptionRecord->ExceptionInformation[1];
     crash_fn(&c);
     return EXCEPTION_CONTINUE_SEARCH;
 }
+
+static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) { return report_exception(ep, 1); }
+
+// The first-chance hook leaves driver faults to their handlers. If none handles a fault, capture its final
+// context too: a bad native return into private or unmapped memory otherwise leaves no runtime crash report.
+static LONG WINAPI crash_unhandled(EXCEPTION_POINTERS *ep) { return report_exception(ep, 0); }
 
 // abort() and an invalid parameter to a C runtime function raise no exception: the C runtime ends the process with
 // 0xc0000409 after calling the SIGABRT or invalid-parameter handler. The report names the host frames in this
@@ -613,6 +625,7 @@ static void invalid_parameter(const wchar_t *expr, const wchar_t *func, const wc
 void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
     crash_fn = fn;
     AddVectoredExceptionHandler(0, crash_veh);
+    SetUnhandledExceptionFilter(crash_unhandled);
     signal(SIGABRT, abort_signal);
     _set_invalid_parameter_handler(invalid_parameter);
 }

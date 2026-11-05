@@ -290,11 +290,27 @@ static void crash_handler(const PlatCrash *x) {
     if (plat_xchg32(&busy, 1)) plat_exit(71);
     char d[160];
     uintptr_t rip = x->rip;
-    rt_logf("FATAL: %s (%#x) at host %p (totk+%#llx)", x->what, x->code, (void *)rip, (unsigned long long)x->offset);
+    char module[128];
+    uintptr_t module_base;
+    if (plat_module_of(rip, module, sizeof module, &module_base))
+        rt_logf("FATAL: %s (%#x) at host %p (%s+%#llx)", x->what, x->code, (void *)rip, module,
+                (unsigned long long)(rip - module_base));
+    else
+        rt_logf("FATAL: %s (%#x) at host %p (private or unmapped memory)", x->what, x->code, (void *)rip);
     if (x->access >= 0)
         rt_logf(", %s address %#llx", x->access == 1 ? "writing" : x->access == 8 ? "executing" : "reading",
                 (unsigned long long)x->addr);
     rt_log_raw("\n", 1);
+    if (x->has_registers) {
+        static const char *const names[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                                              "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
+        for (int i = 0; i < 16; i++)
+            rt_log("host register: %s=%#llx", names[i], (unsigned long long)x->registers[i]);
+        uint64_t stack[16];
+        if (plat_mem_read(x->registers[4], stack, sizeof stack))
+            for (int i = 0; i < 16; i++)
+                rt_log("host stack: +%#x=%#llx", i * 8, (unsigned long long)stack[i]);
+    }
     uint64_t f = lifted_function(rip);
     if (f) rt_logf("  in lifted function f_%llx = %s\n", (unsigned long long)f, ldr_describe(f, d, sizeof d));
     for (int i = 0; i < x->nframes; i++) {   // abort and invalid parameter: where the host code called it
@@ -522,7 +538,7 @@ static int usage(const char *argv0) {
     fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
                     "--probe-cfg | --probe-dpi | --probe-kernel | --probe-ipc | --probe-ipc-lifetime | --probe-services | --probe-fs | --probe-gfx-abi | "
                     "--probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-shader-geometry | --probe-vkmem | "
-                    "--probe-vkexec | --probe-vkgeometry | --probe-vkgeometry-passthrough | --probe-vkgeometry-passthrough-ordering | --probe-vkclear | --probe-vkcopy-astc | --probe-vkpool | --probe-vkreset | --probe-astc | --probe-movie | --prepare-shaders | --warm-shaders | --boot |--seconds S [--shot PNG]]\n", argv0);
+                    "--probe-vkexec | --probe-vkusnap | --probe-vkgeometry | --probe-vkgeometry-passthrough | --probe-vkgeometry-passthrough-ordering | --probe-vkclear | --probe-vkcopy-astc | --probe-vkpool | --probe-vkreset | --probe-astc | --probe-movie | --prepare-shaders | --warm-shaders | --boot |--seconds S [--shot PNG]]\n", argv0);
     return 2;
 }
 
@@ -624,6 +640,7 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "--probe-shader-geometry")) return probe_geometry_shader();
     if (!strcmp(mode, "--probe-vkmem")) return probe_vkmem();
     if (!strcmp(mode, "--probe-vkexec")) return probe_vkexec();
+    if (!strcmp(mode, "--probe-vkusnap")) return probe_vkusnap();
     if (!strcmp(mode, "--probe-vkgeometry")) return probe_vkgeometry();
     if (!strcmp(mode, "--probe-vkgeometry-passthrough")) return probe_vkgeometry_passthrough();
     if (!strcmp(mode, "--probe-vkgeometry-passthrough-ordering")) return probe_vkgeometry_ordering();

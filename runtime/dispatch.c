@@ -184,6 +184,13 @@ __attribute__((noinline, noreturn, cold)) static void dispatch_fail(Cpu *c) {
     const char *why = (pc & 3) ? "misaligned address"
                     : module_at(pc) ? "not a function start"
                     : "outside every module, no host function registered";
+    // This is the context passed to the failed branch, rather than the last state published to kern_cpu().
+    // In particular, x16/x17 identify the GOT slot and target of an AArch64 PLT stub.
+    rt_log("dispatch failure: thread %u context %p current %p pc %#llx sp %#llx lr %#llx",
+           plat_thread_id(), (void *)c, (void *)kern_cpu(), (unsigned long long)pc,
+           (unsigned long long)c->sp, (unsigned long long)c->x[30]);
+    for (int i = 0; i < 31; i++)
+        rt_log("dispatch register: x%d=%#llx", i, (unsigned long long)c->x[i]);
     rt_fatal("rt_dispatch: no function at guest pc %s: %s (lr %s)", rt_guest_name(pc, at, sizeof at), why,
              rt_guest_name(c->x[30], lr, sizeof lr));
 }

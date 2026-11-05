@@ -111,6 +111,13 @@ static PlatMutex G = PLAT_MUTEX_INIT;
 static void stall_arm(void);
 static struct { int type; void *obj; } g_h[MAX_H];
 static _Thread_local RtThread *tcur;
+
+// A native fiber can resume on another OS thread. Keep TLS lookup out of the suspended function so the compiler
+// cannot reuse its pre-switch TLS base; the barrier also prevents treating this accessor as a pure lookup.
+static __attribute__((noinline)) RtThread *thread_after_switch(void) {
+    __asm__ volatile("" ::: "memory");
+    return tcur;
+}
 _Static_assert(offsetof(RtThread, preempt) == 0, "host.h kern_preempt_pending reads the first int");
 _Static_assert(offsetof(RtThread, host_depth) == sizeof(int), "host.h kern_host_depth reads the second int");
 static RtThread *g_all, *g_wait, *g_main;
@@ -2145,7 +2152,7 @@ static void fiber_switch_to(RtThread *t, const Cpu *from, Fiber *to);
 
 // After a host fiber switch: release the context left behind, and finish an ExitThread issued on a fiber.
 static void fiber_resumed(void) {
-    RtThread *t = tcur;
+    RtThread *t = thread_after_switch();
     rt_fpcr_sync(t->cur);   // the host fiber resumes with its own MXCSR (platform.h fibers switch it)
     if (t->leaving) {
         __atomic_store_n(&t->leaving->running, 0, __ATOMIC_RELEASE);
@@ -2158,14 +2165,14 @@ static void fiber_main(void *p) {
     Fiber *f = p;
     fiber_resumed();
     Cpu *c = f->cpu;
-    tcur->host_depth = 0;   // a new fiber starts at the top level; each context restores its own depth on resume
+    thread_after_switch()->host_depth = 0;   // each context restores its own depth on resume
     uint64_t next = rt_call(c, f->func, 1, f->arg);
     f->state = F_DONE;
     Fiber *n = NULL;
     if (next && !(n = fiber_find(next)))
         rt_fatal("fiber %#llx returned %#llx, which is not an initialized fiber", (unsigned long long)f->addr,
                  (unsigned long long)next);
-    fiber_switch_to(tcur, c, n);   // NULL: back to the thread's own context
+    fiber_switch_to(thread_after_switch(), c, n);   // NULL: back to the current thread's own context
     rt_fatal("fiber %#llx resumed after it finished", (unsigned long long)f->addr);
 }
 
@@ -2196,7 +2203,7 @@ static void fiber_switch_to(RtThread *t, const Cpu *from, Fiber *to) {
     t->cur = dst;
     int depth = t->host_depth;
     plat_fiber_switch(to ? to->host : t->base_fiber);
-    t->host_depth = depth;
+    thread_after_switch()->host_depth = depth;
     fiber_resumed();
 }
 

@@ -201,6 +201,10 @@ Runtime probes, each a mode of `totk.exe` (the list is at the top of `runtime/ma
 part of `--probe-vkexec` translate shaders of the census below: they look for `build/<ver>/shaders/jobs.json` of the
 exe's own version first, then of the other one.
 
+`oot.exe --probe-vkusnap` checks uniform snapshots of bindings inherited from a previous submission and GPU-write
+invalidation on a real Vulkan device. It needs no game files or shader census. `--probe-kernel` also includes a
+cross-thread fiber migration regression (40 handoffs, then return on a third thread after the original owners ended).
+
 Shaders: `.venv-py314\Scripts\python tools\shader_census.py --version <ver> --translate` extracts every Maxwell shader
 to `build\<ver>\shaders\` and runs it through the translator and `spirv-val`; failure groups go to `failures.txt`.
 `tools\xlate_smoke.py` checks the translator alone, without game files.

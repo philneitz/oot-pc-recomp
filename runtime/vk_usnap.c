@@ -23,6 +23,7 @@
 #include "host.h"
 #include "nvn_api.h"
 #include "vk.h"
+#include "vk_exec.h"
 #include "platform/platform.h"
 
 #define ALIGN 256u
@@ -107,6 +108,13 @@ static void arena_done(void *arg) {   // completion thread: the GPU has read it
     plat_mutex_unlock(&free_lock);
 }
 
+static void collect_binding(const p_bind_buf *b) {
+    if (!b->addr || !b->size) return;
+    if (U.ncol == U.ccol) U.col = grow(U.col, &U.ccol, sizeof *U.col);
+    uint64_t n = b->size < MAX_RANGE ? b->size : MAX_RANGE;
+    U.col[U.ncol++] = (Rng){b->addr & ~(uint64_t)(ALIGN - 1), b->addr + n};
+}
+
 static void collect(const op_hdr *h, int depth) {
     for (;;) {
         if (h->size < sizeof *h || (h->size & 7) || h->op >= OP_COUNT_)
@@ -118,14 +126,7 @@ static void collect(const op_hdr *h, int depth) {
             continue;
         }
         if (h->op == OP_CALL && depth < CALL_DEPTH) collect(nvn_op_first(((const p_jump *)a)->target), depth + 1);
-        if (h->op == OP_BIND_UBO) {
-            const p_bind_buf *b = a;
-            if (b->addr && b->size) {
-                if (U.ncol == U.ccol) U.col = grow(U.col, &U.ccol, sizeof *U.col);
-                uint64_t n = b->size < MAX_RANGE ? b->size : MAX_RANGE;
-                U.col[U.ncol++] = (Rng){b->addr & ~(uint64_t)(ALIGN - 1), b->addr + n};
-            }
-        }
+        if (h->op == OP_BIND_UBO) collect_binding(a);
         h = nvn_op_next(h);
     }
 }
@@ -217,7 +218,7 @@ static void summary(void) {
     U.subs = U.off_subs = U.regions = U.bytes = U.copy_ns = U.hits = U.drops = U.inflight = U.refused = 0;
 }
 
-void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence) {
+void vk_usnap_begin(const VkExec *ex, const uint64_t *handles, int n, uint64_t fence) {
     if (!U.mode) U.mode = rt_knob("UBO_SNAPSHOT", "1") + 1;   // stored +1: 0 is "not read yet"
     U.on = 0, U.fence = fence, U.gen++;
     summary();
@@ -227,6 +228,10 @@ void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence) {
     }
     uint64_t t0 = kern_now_ns();
     U.ncol = 0;
+    // Replay bindings persist across submissions. A stream can draw with an earlier uniform binding without
+    // another OP_BIND_UBO; that range needs this submission's snapshot just as a newly bound range does.
+    for (int stage = 0; stage < 6; stage++)
+        for (int slot = 0; slot < 18; slot++) collect_binding(&ex->ubo[stage][slot]);
     for (int i = 0; i < n; i++)
         if (handles[i]) collect(nvn_op_first(handles[i]), 0);
     sort_col();

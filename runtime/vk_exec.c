@@ -977,7 +977,7 @@ static int record_impl(VkCommandBuffer cb, const uint64_t *handles, int n, uint6
     part_t0 = kern_now_ns();
     x_here = 1;
     int memory = n || work;
-    if (memory) vk_mem_mirror_begin(), vk_usnap_begin(handles, n, fence);
+    if (memory) vk_mem_mirror_begin(), vk_usnap_begin(ex, handles, n, fence);
     if (work) work(ex, context);
     else {
         for (int i = 0; i < n; i++) {
