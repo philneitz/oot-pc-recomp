@@ -2913,25 +2913,16 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
     vk_texture_unlock();
 }
 
-// A tensor stage was dropped. The chain per picture is three dispatches: two one-row ones (900x1, 5400x1) and a last one
-// with several rows (80x180) that writes the large picture (img1). All three sample the network's input as tex1, whether a
-// compute shader (the video's conversion) or a render pass (gameplay) made it. The last stage gets a linear blit of tex1
-// into its largest storage image.
-static void upscale_standin(VkExec *ex, const p_dispatch *d) {
-    if (d->y <= 1) return;
+// A tensor stage was dropped: if it binds a storage image larger than the last compute picture, scale that picture into it.
+static void upscale_standin(VkExec *ex) {
+    if (!up_src.image || !up_src.fresh) return;   // once per new picture: every stage of the chain would do it again
     vk_texture_lock();
     const VkTexImage *t = largest_storage_image(ex);
-    uint64_t in = ex->tex[NVN_STAGE_CS][1];
-    const VkTexImage *s = in ? vk_texture_by_id_locked(&ex->tex_pool, (int)(in & 0xfffff), NULL, NULL) : NULL;
-    if (s && s->type == VK_IMAGE_TYPE_2D && s->width >= 1280 && s->height >= 720 && (s->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
-        up_src.image = s->image, up_src.w = s->width, up_src.h = s->height, up_src.format = s->format, up_src.usage = s->usage;
-    else
-        up_src.image = VK_NULL_HANDLE;
     VkImage dst = VK_NULL_HANDLE;
     uint32_t w = 0, h = 0;
     VkFormat dst_format = VK_FORMAT_UNDEFINED;
     VkImageUsageFlags dst_usage = 0;
-    if (up_src.image && t && t->width > up_src.w && t->height > up_src.h && t->image != up_src.image) {
+    if (t && t->width > up_src.w && t->height > up_src.h && t->image != up_src.image) {
         dst = t->image, w = t->width, h = t->height, dst_format = t->format, dst_usage = t->usage;
         vk_texture_storage_bound_locked(t);   // as a storage binding does: the GPU writes this image (what later samples must see)
     }
@@ -2946,6 +2937,7 @@ static void upscale_standin(VkExec *ex, const p_dispatch *d) {
     vkCmdPipelineBarrier2(ex->cb, &di);
     VkImageBlit rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)up_src.w, (int32_t)up_src.h, 1}},
                       .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}}};
+    up_src.fresh = 0;
     vkCmdBlitImage(ex->cb, up_src.image, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &rg, VK_FILTER_LINEAR);
 
     mb.srcStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT, mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -3002,7 +2994,7 @@ static void op_dispatch(VkExec *ex, const p_dispatch *d) {
                         rt_log("%s", s);
                     }
                 }
-                upscale_standin(ex, d);
+                upscale_standin(ex);
                 return;
             }
     }
