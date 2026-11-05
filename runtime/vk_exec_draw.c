@@ -484,10 +484,12 @@ static void twins_release(VkCtx *c);
 
 // Releases the stand-ins and the depth twins. The device must be idle; the game path leaves them to process exit like
 // the pipelines.
+static void upscale_release(void);
 void vk_exec_draw_shutdown(void) {
     VkCtx *c = vk_ctx();
     if (!c) return;
     twins_release(c);
+    upscale_release();
     for (int i = 0; Z.ready && i < DV_COUNT; i++) {
         if (Z.img[i].sview != Z.img[i].view) vkDestroyImageView(c->device, Z.img[i].sview, NULL);
         vkDestroyImageView(c->device, Z.img[i].view, NULL);
@@ -2882,7 +2884,51 @@ static void op_draw_idx_ind(VkExec *ex, const p_draw_idx_ind *d) {
 
 // ---- the upscaler's stand-in (Ocarina of Time)
 // The picture a compute shader wrote last (the video's NV12 -> RGBA conversion is one), kept as the source of the blit.
-static struct { VkImage image; uint32_t w, h; VkFormat format; VkImageUsageFlags usage; int fresh; } up_src;   // fresh: not blitted since written
+static struct { VkImage image; uint64_t addr; uint32_t w, h; VkFormat format; VkImageUsageFlags usage; int fresh, packed; } up_src;   // fresh: not blitted since written
+
+// RGB9E5 conversion from Zuriel-Zurichi's fix/oot-rendering-3d (c3ad87b).
+static struct { VkImage image; VmaAllocation alloc; uint32_t w, h; } up_packed;
+
+static void upscale_release(void) {
+    if (up_packed.image) vmaDestroyImage(vk_ctx()->vma, up_packed.image, up_packed.alloc);
+    memset(&up_packed, 0, sizeof up_packed);
+    memset(&up_src, 0, sizeof up_src);
+}
+
+static VkImage upscale_rgb9e5(VkExec *ex) {
+    VkCtx *c = vk_ctx();
+    if (!up_packed.image || up_packed.w != up_src.w || up_packed.h != up_src.h) {
+        if (up_packed.image) vk_defer_image(up_packed.image, up_packed.alloc);
+        memset(&up_packed, 0, sizeof up_packed);
+        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+            .format = VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, .extent = {up_src.w, up_src.h, 1}, .mipLevels = 1,
+            .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(c->vma, &ii, &ai, &up_packed.image, &up_packed.alloc, NULL) != VK_SUCCESS)
+            rt_fatal("tensor: RGB9E5 conversion image allocation failed");
+        up_packed.w = up_src.w, up_packed.h = up_src.h;
+    }
+    // This image has independent memory. Copying preserves the packed bits without
+    // touching another texture's aliased pool storage or performing a float conversion.
+    VkImageMemoryBarrier2 image = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT, .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = up_packed.image, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &image};
+    vkCmdPipelineBarrier2(ex->cb, &di);
+    VkImageCopy copy = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .extent = {up_src.w, up_src.h, 1}};
+    vkCmdCopyImage(ex->cb, up_src.image, VK_IMAGE_LAYOUT_GENERAL, up_packed.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    image.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT, image.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    image.dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT, image.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+    image.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier2(ex->cb, &di);
+    ex->recorded++;
+    return up_packed.image;
+}
 
 // The bound storage image of the compute stage with the largest area (and its size), or NULL.
 static const VkTexImage *largest_storage_image(VkExec *ex) {
@@ -2900,16 +2946,24 @@ static const VkTexImage *largest_storage_image(VkExec *ex) {
 // earlier dispatches, the stand-in's own destination among them).
 static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
     const VkTexImage *best = NULL;
+    int packed = 0;
     vk_texture_lock();
     for (uint32_t i = 0; i < info->n_bindings; i++) {
         const VkPipeBinding *b = &info->bindings[i];
         if (b->kind != GFX_RES_IMG || !b->res || b->res->slot < 0 || b->res->slot >= 32) continue;
         uint64_t h = ex->img[NVN_STAGE_CS][b->res->slot];
-        const VkTexImage *t = h ? vk_texture_by_id_locked(&ex->tex_pool, (int)(h & 0xfffff), NULL, NULL) : NULL;
-        if (t && t->type == VK_IMAGE_TYPE_2D && (!best || (uint64_t)t->width * t->height > (uint64_t)best->width * best->height)) best = t;
+        view_t view;
+        int has_view = 0;
+        const VkTexImage *t = h ? vk_texture_by_id_locked(&ex->tex_pool, (int)(h & 0xfffff), &view, &has_view) : NULL;
+        if (t && t->type == VK_IMAGE_TYPE_2D && (!best || (uint64_t)t->width * t->height > (uint64_t)best->width * best->height)) {
+            best = t;
+            packed = has_view && view.set_format && view.format == NVN_FORMAT_R32UI &&
+                     (t->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || t->format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32);
+        }
     }
-    if (best && best->width >= 1280 && best->height >= 720)
-        up_src.image = best->image, up_src.w = best->width, up_src.h = best->height, up_src.format = best->format, up_src.usage = best->usage, up_src.fresh = 1;
+    if (best && ((best->width >= 1280 && best->height >= 720) || packed))
+        up_src.image = best->image, up_src.addr = best->addr, up_src.w = best->width, up_src.h = best->height,
+        up_src.format = best->format, up_src.usage = best->usage, up_src.fresh = 1, up_src.packed = packed;
     vk_texture_unlock();
 }
 
@@ -2917,6 +2971,17 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
 static void upscale_standin(VkExec *ex) {
     if (!up_src.image || !up_src.fresh) return;   // once per new picture: every stage of the chain would do it again
     vk_texture_lock();
+    int rgb9e5 = 0;
+    if (up_src.packed && up_src.format == VK_FORMAT_B10G11R11_UFLOAT_PACK32)
+        for (int slot = 0; slot < 32; slot++) {
+            uint64_t handle = ex->tex[NVN_STAGE_CS][slot];
+            view_t view;
+            int has_view = 0;
+            const VkTexImage *input = handle ? vk_texture_by_id_locked(&ex->tex_pool, (int)(handle & 0xfffff), &view, &has_view) : NULL;
+            if (input && input->addr == up_src.addr && input->width == up_src.w && input->height == up_src.h &&
+                ((has_view && view.set_format && view.format == NVN_FORMAT_RGB9E5F) ||
+                 input->format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)) { rgb9e5 = 1; break; }
+        }
     const VkTexImage *t = largest_storage_image(ex);
     VkImage dst = VK_NULL_HANDLE;
     uint32_t w = 0, h = 0;
@@ -2931,14 +2996,17 @@ static void upscale_standin(VkExec *ex) {
     cb_res(ex);
     vk_exec_barrier(ex);   // ends the pass; the source is written
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                           .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                            .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT};
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
     vkCmdPipelineBarrier2(ex->cb, &di);
+    VkImage source = rgb9e5 ? upscale_rgb9e5(ex) : up_src.image;
     VkImageBlit rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)up_src.w, (int32_t)up_src.h, 1}},
                       .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)w, (int32_t)h, 1}}};
     up_src.fresh = 0;
-    vkCmdBlitImage(ex->cb, up_src.image, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &rg, VK_FILTER_LINEAR);
+    vkCmdBlitImage(ex->cb, source, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &rg, VK_FILTER_LINEAR);
+    static int decoded;
+    if (rgb9e5 && !decoded++) rt_log("tensor: packed HDR source decoded through an independent RGB9E5 image");
 
     mb.srcStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT, mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, mb.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;

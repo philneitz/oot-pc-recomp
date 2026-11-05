@@ -751,6 +751,8 @@ static void mix_circular_sink(AudioRenderer *r,int id) {
 uint32_t audio_mixer_sink_written(AudioRenderer *r,int id) {Mixer *m=r->mixer;return m?m->sink_written[id]:0;}
 
 static uint64_t diag_frames;   // frames rendered, for the audio trace's 5 s windows
+typedef struct { float peak, vol, send; int fmt, cc, dest, active; uint32_t rate, splitter; unsigned buffers; } VoiceDiag;
+static VoiceDiag voice_diag[256];
 void audio_mixer_render(AudioRenderer *r, double seconds) {
     (void)seconds;
     Mixer *m = r->mixer; if (!m) return;
@@ -785,35 +787,25 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
                 }
             }
         }
-        if (rt_trace & RT_TRACE_AUDIO) {   // which sounding voices reach a mix, about every 5 s (up to 24 lines each)
-            static uint64_t last_at; static int shown; static uint8_t voice_seen[8192];
-            if (diag_frames >= last_at + 240000) { last_at = diag_frames; shown = 0; memset(voice_seen, 0, sizeof voice_seen); }
-            float peak = 0;
-            for (int c = 0; c < cc; c++) for (int k = 0; k < frames; k++) { float q = fabsf(vs[c][k]); if (q > peak) peak = q; }
-            if (peak > 0.005f && shown < 24 && i < 8192 && !voice_seen[i]) {
-                shown++;
-                voice_seen[i] = 1;
-                double send = 0; int dests = 0; unsigned send_buffers = 0;
-                if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
-                    const SplitInfo *s = &m->split[v->in.splitter_id];
-                    for (int k = 0; k < s->ndest; k++) {
-                        SplitDest *d = &m->dest[s->ids[k]];
-                        if (!d->used || !mix_valid(r, d->dest)) continue;
-                        dests++;
-                        for (int b = 0; b < r->mixes[d->dest].buffer_count && b < 24; b++) {
-                            send += fabsf(d->vol[b]);
-                            if (fabsf(d->vol[b]) > 0.001f) send_buffers |= 1u << b;
-                        }
-                    }
-                } else if (mix_valid(r, v->in.mix_id)) {
-                    for (int c = 0; c < cc; c++) {
-                        int32_t id = v->in.channel_ids[c]; if (id < 0 || id >= r->param.voice_count * 6) continue;
-                        dests++;
-                        for (int b = 0; b < r->mixes[v->in.mix_id].buffer_count && b < 24; b++) send += fabsf(r->channels[id].mix[b]);
-                    }
+        if ((rt_trace & RT_TRACE_AUDIO) && i < 256) {   // every sounding voice's peak over the window, reported by the sink below
+            VoiceDiag *q = &voice_diag[i];
+            for (int c = 0; c < cc; c++) for (int k = 0; k < frames; k++) { float x = fabsf(vs[c][k]); if (x > q->peak) q->peak = x; }
+            q->fmt = (int)v->in.sample_format, q->cc = cc, q->rate = v->in.sample_rate, q->vol = v->in.volume, q->splitter = v->in.splitter_id, q->active = 1;
+            q->buffers = 0, q->send = 0;
+            if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
+                const SplitInfo *s = &m->split[v->in.splitter_id];
+                for (int k = 0; k < s->ndest; k++) {
+                    SplitDest *d = &m->dest[s->ids[k]];
+                    if (!d->used || !mix_valid(r, d->dest)) continue;
+                    q->dest = d->dest;
+                    for (int b = 0; b < r->mixes[d->dest].buffer_count && b < 24; b++) { q->send += fabsf(d->vol[b]); if (fabsf(d->vol[b]) > 0.001f) q->buffers |= 1u << b; }
                 }
-                rt_log("audio: voice %d fmt %d ch %d rate %u vol %.3f mix %d splitter %u: peak %.3f, send %.3f over %d dests, buffers %#x", i, (int)v->in.sample_format, cc,
-                       v->in.sample_rate, v->in.volume, v->in.mix_id, v->in.splitter_id, peak, send, dests, send_buffers);
+            } else if (mix_valid(r, v->in.mix_id)) {
+                q->dest = v->in.mix_id;
+                for (int c = 0; c < cc; c++) {
+                    int32_t id = v->in.channel_ids[c]; if (id < 0 || id >= r->param.voice_count * 6) continue;
+                    for (int b = 0; b < r->mixes[v->in.mix_id].buffer_count && b < 24; b++) { q->send += fabsf(r->channels[id].mix[b]); if (fabsf(r->channels[id].mix[b]) > 0.001f) q->buffers |= 1u << b; }
+                }
             }
         }
         if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
@@ -881,6 +873,12 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
         static uint64_t sink_last;
         if (diag_frames >= sink_last + 240000) {
             sink_last = diag_frames;
+            for (int i = 0; i < 256; i++) {
+                VoiceDiag *q = &voice_diag[i];
+                if (q->active && q->peak > 0.002f)
+                    rt_log("audio: voice %d fmt %d ch %d rate %u vol %.3f splitter %u dest %d: peak %.3f, send %.3f, buffers %#x", i, q->fmt, q->cc, q->rate, q->vol, q->splitter, q->dest, q->peak, q->send, q->buffers);
+                q->peak = 0, q->active = 0;
+            }
             rt_log("audio: sink inputs %u: %d %d %d %d %d %d, downmix %d: %.3f %.3f %.3f %.3f; mix 0 offset %d buffers %d vol %.3f", sink->input_count, sink->inputs[0], sink->inputs[1], sink->inputs[2],
                    sink->inputs[3], sink->inputs[4], sink->inputs[5], (int)sink->downmix_enabled, sink->downmix[0], sink->downmix[1], sink->downmix[2], sink->downmix[3], m->offset[0],
                    (int)r->mixes[0].buffer_count, r->mixes[0].volume);
