@@ -29,6 +29,8 @@
 #include "nvn_indirect_reset.h"
 #include "vk.h"
 #include "vk_exec.h"
+#include "vk_view_format.h"
+#include "tex.h"
 #include "platform/platform.h"
 
 #define MAX_BINDINGS 128
@@ -583,6 +585,24 @@ static nvn_hmap views_by_image;          // VkImage -> its first ViewNode
 // the image cannot serve it (the caller binds a stand-in). Texture lock held.
 static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, int hv, uint16_t rtype, int storage) {
     (void)ex;
+    // NVNtextureView's format is a bit reinterpretation. Ocarina of Time's antialiasing pass writes its packed colour
+    // through an R32_UINT view (NVN 0xb) of an R11G11B10F image and reads it back through an RGB9E5 descriptor; in the
+    // image's own format the world came out black, then in bands of false colour. (Zuriel-Zurichi, c3ad87b.)
+    VkFormat format = img->format;
+    const uint8_t *channels = img->chan;
+    int alpha_one = img->alpha_one;
+    TexVkFormat mapped;
+    if (hv && v->set_format && img->aspect == VK_IMAGE_ASPECT_COLOR_BIT && !img->block_views) {
+        if (!tex_vk_format(v->format, &mapped) || !vk_color_view_compatible(img->format, mapped.vk)) return VK_NULL_HANDLE;
+        format = mapped.vk, channels = mapped.chan, alpha_one = mapped.alpha_one;
+        // The translator types every storage image as float (format Unknown) and stores packed integers bitcast to
+        // float: a 32-bit float view keeps those bits, an integer view would not match the shader's sampled type.
+        if (storage)
+            format = format == VK_FORMAT_R32_UINT || format == VK_FORMAT_R32_SINT ? VK_FORMAT_R32_SFLOAT
+                   : format == VK_FORMAT_R32G32_UINT || format == VK_FORMAT_R32G32_SINT ? VK_FORMAT_R32G32_SFLOAT
+                   : format == VK_FORMAT_R32G32B32A32_UINT || format == VK_FORMAT_R32G32B32A32_SINT
+                       ? VK_FORMAT_R32G32B32A32_SFLOAT : format;
+    }
     VkImageViewType vt = res_view_type(rtype);
     int ms = (rtype & 0x200) != 0;
     if ((img->samples > 1) != ms || (storage && ms)) return VK_NULL_HANDLE;
@@ -622,25 +642,34 @@ static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, 
     uint8_t sw[4] = {NVN_TEXTURE_SWIZZLE_R, NVN_TEXTURE_SWIZZLE_G, NVN_TEXTURE_SWIZZLE_B, NVN_TEXTURE_SWIZZLE_A};
     if (!storage) {   // MNG nvn_mtl.m tex_swizzle_sel: view selectors replace the texture's, then the format remap
         memcpy(sw, hv && v->set_swizzle ? v->swz : img->swz, 4);
-        if (img->alpha_one || img->chan[0])
+        if (alpha_one || channels[0])
             for (int i = 0; i < 4; i++) {
-                if (img->alpha_one && sw[i] == NVN_TEXTURE_SWIZZLE_A) sw[i] = NVN_TEXTURE_SWIZZLE_ONE;
-                else if (img->chan[0] && sw[i] >= NVN_TEXTURE_SWIZZLE_R && sw[i] <= NVN_TEXTURE_SWIZZLE_A)
-                    sw[i] = img->chan[sw[i] - NVN_TEXTURE_SWIZZLE_R];
+                if (alpha_one && sw[i] == NVN_TEXTURE_SWIZZLE_A) sw[i] = NVN_TEXTURE_SWIZZLE_ONE;
+                else if (channels[0] && sw[i] >= NVN_TEXTURE_SWIZZLE_R && sw[i] <= NVN_TEXTURE_SWIZZLE_A)
+                    sw[i] = channels[sw[i] - NVN_TEXTURE_SWIZZLE_R];
             }
     }
     uint32_t swz = (uint32_t)sw[0] | (uint32_t)sw[1] << 8 | (uint32_t)sw[2] << 16 | (uint32_t)sw[3] << 24;
-    ViewKey k = {img->image, img->format, vt, aspect, l0, nl, y0, ny, swz};
+    // NVN selectors use three bits per byte; bit 31 keeps a storage view apart from a sampled view of the same format.
+    ViewKey k = {img->image, format, vt, aspect, l0, nl, y0, ny, swz | (storage ? 0x80000000u : 0)};
     if (!view_of.klen) nvn_hm_init(&view_of, sizeof(ViewKey)), nvn_hm_init(&views_by_image, sizeof(VkImage));
     VkImageView found = (VkImageView)nvn_hm_get(&view_of, &k);
     if (found) return found;
+    if (format != img->format) {   // a reinterpreting view: its format must allow what it is used for
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(vk_ctx()->phys, format, &fp);
+        if (!(fp.optimalTilingFeatures & (storage ? VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT : VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)))
+            return VK_NULL_HANDLE;
+    }
     VkImageViewCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img->image, .viewType = vt,
-                                .format = img->format,
+                                .format = format,
                                 .components = {swz_of(sw[0]), swz_of(sw[1]), swz_of(sw[2]), swz_of(sw[3])},
                                 .subresourceRange = {aspect, l0, nl, y0, ny}};
     VkImageViewUsageCreateInfo use = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
-                                      .usage = VK_IMAGE_USAGE_SAMPLED_BIT};
-    if (img->block_views) ci.pNext = &use;   // the image's COLOR_ATTACHMENT usage is its block views' (vk_texture.c)
+                                      .usage = storage ? VK_IMAGE_USAGE_STORAGE_BIT : VK_IMAGE_USAGE_SAMPLED_BIT};
+    // Only what the view is used as: the image's other usages (attachment, block views' COLOR_ATTACHMENT, the
+    // extended storage usage of RGB9E5) need not be supported by the view's format.
+    ci.pNext = &use;
     VkImageView view;
     if (vkCreateImageView(vk_ctx()->device, &ci, NULL, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
     ViewNode *n = malloc(sizeof *n);

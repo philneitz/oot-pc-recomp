@@ -2563,6 +2563,11 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                             if (!packed_offsets[i] && target == source_b + i) packed_offsets[i] = definition.words[1];
                         continue;
                     }
+                    // BRA, BSSY, BSYNC, BREAK and WARPSYNC write no general register; their bits 16-23 are not a
+                    // destination (a BRA's are 0, which read as "writes R0" and rejected Ocarina of Time's scene
+                    // upscale shader). Passing a branch is sound: control_entries above stops the scan at any
+                    // instruction a jump lands on, so the gather is reached only through the instructions scanned.
+                    if (op == 0x947 || op == 0x945 || op == 0x941 || op == 0x942 || op == 0x948) continue;
                     if (op != 0x802 && op != 0x307 && op != 0x421 && op != 0xa20) {
                         // Any other instruction is fine as long as it does not write the offset registers.
                         const u32 written = write_count(definition).value_or(1);

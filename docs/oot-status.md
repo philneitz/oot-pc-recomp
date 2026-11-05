@@ -10,11 +10,13 @@ Newest first. Title 0400486024DEC000, update 1.1.1, build `oot111`.
   submission copied 1.4 GB from the VRAM mirror back to guest memory: a ~120 ms GPU part per frame of ~650 ms, PCIe at
   ~13 GB/s, the SMs mostly idle (`nvidia-smi dmon`), which is why CPU and GPU use looked low. Storage buffers with no
   size are now capped at 8 MiB, as yuzu/Eden do (`OOT_SBO_UNSIZED_MB`, 0 = old behaviour); the bind is now 8 MiB.
-- **Still open: the same pool doubles RAM and VRAM.** Its first buffer use makes a whole-pool shadow (2.4 GB of host
-  memory, `shadow_make`) and a whole-pool VRAM mirror (2.4 GB, `mirror_create`), though the GPU uses one 8 MiB window
-  of it. On the GTX 1070 / 16 GB PC the process went from 5.3 to 10.6 GB and VRAM to 8.1 of 8.2 GB within ~20 s of
-  entering the world (fix2), and the watchdog stopped it on the loading screen, so the world frame rate with the cap
-  is not measured yet. Next: shadow and mirror only the windows of very large pools that are bound.
+- **The same pool doubled RAM and VRAM; fixed with windowed shadows.** Its first buffer use made a whole-pool shadow
+  (2.4 GB of host memory, `shadow_make`) and a whole-pool VRAM mirror (2.4 GB, `mirror_create`), though the GPU uses
+  one 8 MiB window of it: the process went from 5.3 to 10.6 GB and VRAM to 8.1 of 8.2 GB within ~20 s of entering the
+  world. A deferred-shadow pool of `OOT_POOL_WINDOW_MB` (default 256) or more now gets 64 MiB windows every 32 MiB,
+  made on first use, with no VRAM mirror (vk_memory.c "windowed shadows"). The world run (win1, 170 s with
+  `TOTK_RESOLVE_CHECK=1`) made one window, held ~8.6 GB with 5 GB of the PC still free, and found no resolve-cache
+  mismatch.
 - The `NVN 2 program (Ampere code): no translator yet` lines start after the memory jump, not before. They come from
   `req_init` in gfx_shader.c refusing an NVN 2 program on the Maxwell path before the failure cache key exists, so
   the same draws retry (and are skipped) twice a frame. Cheap; those objects are missing on screen.
@@ -66,8 +68,8 @@ Newest first. Title 0400486024DEC000, update 1.1.1, build `oot111`.
 
 ## Open work, by priority
 
-1. Windowed shadow and mirror for very large pools (the 2.4 GB pool above), then confirm on screen that gameplay
-   shows and measure its frame rate.
+1. The world's 3D scene: see docs/oot-rendering-investigation.md (storage/sampled view formats, lowering fixes,
+   overexposed HDR scene still open).
 2. The composite fills only the top-left 1706x960 of 2560x1440: the dropped neural upscaler did that scaling. The
    stand-in blit (vk_exec_draw.c `upscale_standin`) only finds compute-written sources; in gameplay the source is a
    render-pass output. `OOT_TENSOR_LOG=1` lists what each dropped stage binds.

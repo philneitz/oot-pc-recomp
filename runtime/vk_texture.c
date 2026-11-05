@@ -26,6 +26,7 @@
 #include "nvn_tex.h"
 #include "tex.h"
 #include "vk.h"
+#include "vk_view_format.h"
 #include "vk_exec.h"
 #include "platform/platform.h"
 
@@ -333,6 +334,14 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     // clear colour. Vulkan cannot add the usage later.
     if (!ds && (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && samples == 1) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     VkImageCreateFlags flags = ds ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;   // format-reinterpreting views
+    // RGB9E5 has no storage-image format. Ocarina binds an R32_UINT view to write its packed bits. As in Lichii
+    // vk_texture_cache.cpp MakeImage, a compatible view may supply a usage that the base sampling format cannot support.
+    // (Zuriel-Zurichi, fix/oot-rendering-3d c3ad87b.)
+    if (!ds && samples == 1 && f.vk == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 &&
+        (features_of(VK_FORMAT_R32_UINT) & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+        flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+    }
     // Cube compatible only for cube targets: the replay makes cube views of nothing else (vk_exec_draw.c get_view checks
     // the image's own view type). The flag on every square array of 6+ layers changed how AMD's Windows driver lays such
     // an image out, and terrain material arrays sampled through it came out in rainbow blocks that moved with the mip
@@ -1084,6 +1093,18 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         if (!e) e = any ? any : own;
     }
     if (!e) e = s->t.mem ? entry_of(&s->t) : NULL;
+    // Following live storage must preserve the descriptor's interpretation of its bits, not only its swizzle.
+    // Ocarina's RGB9E5 sampler follows R11G11B10F storage written through a uint view at the same address; sampled in
+    // the followed image's own format, the world came out in bands of false colour. (Zuriel-Zurichi, c3ad87b.)
+    if (e && s->t.d.format != e->t.d.format && !(s->has_view && s->v.set_format)) {
+        TexVkFormat mapped;
+        if (tex_vk_format(s->t.d.format, &mapped) && vk_color_view_compatible(e->pub.format, mapped.vk)) {
+            if (!*has_view) memset(view, 0, sizeof *view);
+            view->format = s->t.d.format;
+            view->set_format = 1;
+            *has_view = 1;
+        }
+    }
     // A followed texture is another descriptor at the same storage: its image holds the content, but sampling takes the
     // slot descriptor's swizzle. The UI renders text into RGBA8 and samples it through a (A,A,A,A) descriptor; with the
     // render target's RGBA swizzle the text blur saw R = 1 everywhere and drew solid boxes behind tips and labels.
@@ -1094,7 +1115,7 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
             sw[0] = NVN_TEXTURE_SWIZZLE_R, sw[1] = NVN_TEXTURE_SWIZZLE_G, sw[2] = NVN_TEXTURE_SWIZZLE_B,
             sw[3] = NVN_TEXTURE_SWIZZLE_A;
         if (memcmp(sw, e->pub.swz, 4)) {
-            if (!s->has_view) memset(view, 0, sizeof *view);
+            if (!*has_view) memset(view, 0, sizeof *view);
             memcpy(view->swz, sw, 4);
             view->set_swizzle = 1;
             *has_view = 1;
