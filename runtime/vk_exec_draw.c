@@ -2626,6 +2626,18 @@ unsupported:
 static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (vk_exec_oq_logging()) vk_exec_oq_attempt();
     if (ex->render_disabled) return 0;
+    // OOT_SKIP_STAGE=<nvn2 hash>[,<hash>...]: drop draws of a program with one of these stages, to see what a pass adds.
+    static uint64_t skip_stage[8];
+    static int nskip_stage = -1;
+    if (nskip_stage < 0) {
+        nskip_stage = 0;
+        const char *e = getenv("OOT_SKIP_STAGE");
+        for (char *q = (char *)e; q && *q && nskip_stage < 8; q += *q == ',') skip_stage[nskip_stage++] = strtoull(q, &q, 16);
+        if (nskip_stage) rt_log("vk_exec: OOT_SKIP_STAGE: draws of %d stages are dropped", nskip_stage);
+    }
+    for (uint32_t k = 0; nskip_stage && ex->prog && k < ex->prog->nstage; k++)
+        for (int i = 0; i < nskip_stage; i++)
+            if (nvn2_origin((const uint8_t *)(uintptr_t)ex->prog->sd[k].data) == skip_stage[i]) return 0;
     static int skip_all = -1;   // DKB_SKIP_DRAWS=1: drop every draw (bisecting GPU faults)
     if (skip_all < 0) skip_all = getenv("DKB_SKIP_DRAWS") != NULL;
     if (skip_all) return 0;
