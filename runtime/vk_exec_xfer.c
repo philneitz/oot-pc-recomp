@@ -243,7 +243,26 @@ static void oq_cb(void *arg) {
     else {
         oq_count += sum;
         if (s->lost && !oq_count) oq_count = 1;
-        if (s->addr) write_counter(s->addr, oq_count);
+        // OOT_OCC_FORCE=<n>: every samples-passed report reads at least n, nothing looks occluded (a test for objects the
+        // game culls from a count). The audio-independent statistic goes out every 3000 reports with TOTK_TRACE=perf or the switch on.
+        static long long force = -1;
+        static uint64_t st_reports, st_zero, st_gpu, st_max;
+        if (force < 0) {
+            const char *e = getenv("OOT_OCC_FORCE");
+            force = e ? atoll(e) : 0;
+            if (force) rt_log("vk: OOT_OCC_FORCE: samples-passed reports read at least %lld", force);
+        }
+        uint64_t out = oq_count;
+        st_reports++;
+        if (!s->addr) st_gpu++;
+        if (!oq_count) st_zero++;
+        if (oq_count > st_max) st_max = oq_count;
+        if (force && out < (uint64_t)force) out = (uint64_t)force;
+        if (st_reports == 200 || st_reports % 6000 == 0) {
+            rt_log("vk: samples-passed reports %llu: %llu read 0, %llu to no CPU-visible memory, largest %llu", (unsigned long long)st_reports,
+                   (unsigned long long)st_zero, (unsigned long long)st_gpu, (unsigned long long)st_max);
+        }
+        if (s->addr) write_counter(s->addr, out);
     }
     free(s);
 }
