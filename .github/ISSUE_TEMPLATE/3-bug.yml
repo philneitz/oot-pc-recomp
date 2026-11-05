@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check the pinned issues first.
+        Check the status file first.
 
         Do not attach or link game files, keys, firmware, builds, shader caches or screenshots of the game. Issues that do are closed.
   - type: checkboxes
@@ -13,7 +13,7 @@ body:
     attributes:
       label: Existing issues
       options:
-        - label: I read the pinned issues and [searched open and closed issues](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues?q=is%3Aissue) for this bug.
+        - label: I read the status file and [searched open and closed issues](https://github.com/philneitz/oot-pc-recomp/issues?q=is%3Aissue) for this bug.
           required: true
   - type: dropdown
     id: area
@@ -54,4 +54,4 @@ body:
     id: log
     attributes:
       label: Log
-      description: Attach logs\totk.log from the folder of dkb.exe, if the game started.
+      description: Attach logs\totk.log from the folder of oot.exe, if the game started.

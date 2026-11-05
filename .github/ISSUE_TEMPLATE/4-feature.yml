@@ -7,7 +7,7 @@ body:
     attributes:
       label: Existing issues
       options:
-        - label: I read the [roadmap](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10) and [searched open and closed issues](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues?q=is%3Aissue) for this request.
+        - label: I read the [status file](https://github.com/philneitz/oot-pc-recomp/blob/oot/merged/docs/oot-status.md) and [searched open and closed issues](https://github.com/philneitz/oot-pc-recomp/issues?q=is%3Aissue) for this request.
           required: true
   - type: textarea
     id: request

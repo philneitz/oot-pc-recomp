@@ -1,63 +1,52 @@
-# DKB Recomp
-
-> This checkout's `oot-port` branch contains experimental Ocarina of Time 1.1.1 support. See
-> [Ocarina rendering investigation and implementation plan](docs/oot-rendering-investigation.md) for the current
-> build command, upstream branch audit, verified shader corrections and remaining 3D blockers. The Bananza status
-> and instructions below describe the inherited base project.
+# OoT Recomp
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
-[![Content guard](https://github.com/Lucas-blip-png/dkb-pc-recomp/actions/workflows/content-guard.yml/badge.svg?branch=bananza)](https://github.com/Lucas-blip-png/dkb-pc-recomp/actions/workflows/content-guard.yml)
-[![Stars](https://img.shields.io/github/stars/Lucas-blip-png/dkb-pc-recomp?style=flat)](https://github.com/Lucas-blip-png/dkb-pc-recomp/stargazers)
-[![Help wanted](https://img.shields.io/github/issues/Lucas-blip-png/dkb-pc-recomp/help%20wanted?label=help%20wanted)](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues?q=is%3Aopen+label%3A%22help+wanted%22)
-[![Discussions](https://img.shields.io/github/discussions/Lucas-blip-png/dkb-pc-recomp)](https://github.com/Lucas-blip-png/dkb-pc-recomp/discussions)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20the%20work-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/lucasblippng)
 
-**DKB Recomp** is a static recompilation of *Donkey Kong Bananza* (Nintendo Switch 2, 2025) into a native Windows
-x86-64 application with a Vulkan renderer. There is no emulator at run time: the game's ARM64 code is translated to C
-ahead of time and compiled into one executable, and its graphics calls are answered by a host implementation of
-NVN 2. It is built on [TotK Recomp](https://github.com/valentderah/totk-pc-recomp), which does the same for *Tears of
-the Kingdom* on the original Switch.
+**OoT Recomp** is a static recompilation of *The Legend of Zelda: Ocarina of Time* for Nintendo Switch 2, update 1.1.1, into a native Windows x86-64 application with a Vulkan renderer. There is no emulator at
+run time: the game's ARM64 code is translated to C ahead of time and compiled into one executable, `oot.exe`, and its
+graphics calls are answered by a host implementation of NVN 2.
 
-As far as we know, no other static recompilation of a Switch 2 game is public.
-
-> This is a community fork of [Lucas-blip-png/dkb-pc-recomp](https://github.com/Lucas-blip-png/dkb-pc-recomp),
-> created by Lucas-blip-png. The upstream history, original contributor credits and license notices are preserved.
-> This fork adds Linux build support and Linux-specific fixes.
+This fork is [philneitz/oot-pc-recomp](https://github.com/philneitz/oot-pc-recomp), branch `oot/merged`. It is based on
+[Chiuauaa/oot-pc-recomp](https://github.com/Chiuauaa/oot-pc-recomp) and brings together what its sibling projects found
+(see [Where this comes from](#where-this-comes-from)).
 
 > [!IMPORTANT]
-> **No game files are included, and none ever will be.** You need your own copy of *Donkey Kong Bananza*, dumped
-> from your own console. Instructions for obtaining those files will not be provided. There are no downloadable
-> builds: everyone builds from their own dump.
+> **No game files are included, and none ever will be.** You need your own copy of the game, dumped from your own
+> console. Instructions for obtaining those files will not be provided. There are no downloadable builds: everyone
+> builds from their own dump.
 
 ## Status
 
-**Not playable yet.** The game boots, goes through the title screen into the tutorial cave, renders the 3D scene and
-answers the controller: you can walk and punch through the mining tunnel, with the guide movies playing, and one
-hand-played run reached the Ingot Isle Cave-In section. It still
-can crash (on NVIDIA two light quads are skipped to avoid a GPU fault,
-[#9](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/9)), and
-many effects are missing.
-There is no release. An installer builds the game from your own dump: [docs/installer.md](docs/installer.md).
-Progress, day by day: [docs/devlog.md](docs/devlog.md).
+**Early, and not complete.** So far it has been run on one PC with an NVIDIA GPU on Windows, in the opening
+scenes. Other parts of the game and other GPUs are untested on this branch. It restores translator patches 0022 and
+0023, which froze a GTX 1070 on entering the world in the port it is based on.
 
-| Phase | | State |
-| --- | --- | --- |
-| F0 CPU | ✅ | `main` and `sdk` (180,061 functions) lift with no unsupported instruction (ARMv8.3 pointer authentication and `LDAPR` added). Differential tests against Unicorn pass. |
-| F1 OS | ✅ | Boots on TotK Recomp's Horizon host with the Switch 2 differences: RomFS, save, audio, controller. |
-| F2 NVN 2 | ✅ | 700 NVN 2 entry points answered; the game loop runs. 51 new command buffer calls (mesh shaders, VRS, DLSS, push constants…) are accepted but not recorded yet. |
-| F3 Shaders | ✅ | All 4,820 Ampere shader stages of the first 3D scene go through Eglantine's Ampere-to-Maxwell lowering and TotK Recomp's translator to SPIR-V. |
-| F4 Vulkan | ✅ | The title screen and the tutorial's 3D scene render. |
-| F5 Playable | 🚧 | Controller, guide movies (VP9) and push constants work. The native geometry path renders the destructible ground on one Linux GTX 1070; destruction and other GPUs still need validation. Open: a GPU fault some minutes in on NVIDIA, some textures, and performance outside the tutorial. See [#45](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/45). |
+Working there:
 
-The plan, phase by phase: [docs/bananza-plan.md](docs/bananza-plan.md). What is open right now:
-[Roadmap to playable](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10).
+- Boot, title screen, the intro movie and its speech, the save, and walking around the world with a controller.
+- World picture without the white flicker and the holes in colour draws (render conditions on samples-passed reports).
+- Colours, HUD and the depth chain at half resolution.
+
+Open, most visible first:
+
+- **A grey veil from the fog pass**, and indirect light that looks flat next to the original. The cause is not known yet.
+- **Mesh draws are not replayed** (about 36 calls a frame in the first scene), which is probably why the gate and thick
+  moss in Link's house are missing.
+- **Frame rate:** about 45 fps on that GPU since the last compute programs were enabled, down from about 60.
+- **Camera jumps under GPU backlog:** `OOT_GPU_SYNC=1` stops them in the logs. It is a stopgap, and its cost is not
+  measured yet.
+- **No neural upscaler:** a linear blit stands in for it, so the picture is softer than on the console.
+- A crash in the first seconds on about a third of starts. Restarting works; the cause is open.
+
+Findings as they come in: [docs/oot-status.md](docs/oot-status.md) and
+[docs/oot-rendering-investigation.md](docs/oot-rendering-investigation.md).
 
 ## How it works
 
 ```mermaid
 flowchart LR
     subgraph offline["At build time, on your PC"]
-        exefs["Your dump: main + sdk<br/>(ARM64)"] --> lifter["Lifter<br/>recomp/"] --> c["C code"] --> clang["Clang"] --> exe["dkb.exe"]
+        exefs["Your dump: main + subsdk0 + sdk<br/>(ARM64)"] --> lifter["Lifter<br/>recomp/"] --> c["C code"] --> clang["Clang"] --> exe["oot.exe"]
     end
     subgraph runtime["At run time"]
         exe --> host["Horizon host<br/>threads, files, audio, input"]
@@ -66,108 +55,78 @@ flowchart LR
     end
 ```
 
-The longer version is in [docs/architecture.md](docs/architecture.md) (shared with TotK Recomp) and
-[docs/bananza-shaders.md](docs/bananza-shaders.md) (the NVN 2 shader work).
-
-## How to help
-
-Each open problem is a separate, well-bounded job with its own issue. Pick one, say in the issue that you are on it,
-and keep each pull request to one topic. Issues labelled
-[`in progress`](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues?q=is%3Aopen+label%3A%22in+progress%22) are
-already taken, and the top of the [roadmap](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10) says what is
-being worked on right now.
-
-**No code needed**, only your PC and your own copy of the game:
-
-- [#3](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/3) **Test on your GPU.** Everything so far was checked
-  on one NVIDIA card. Runs on AMD, Intel and other NVIDIA cards, with logs, show what breaks there.
-- [#7](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/7) **Play past the tutorial** and report where it stops.
-- [#9](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/9) **The GPU fault after the first guide movie**: seen
-  on three NVIDIA drivers (617.14, 617.42, 621.01); runs on AMD and Intel would show whether it is NVIDIA's.
-
-**Code** ([help wanted](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues?q=is%3Aopen+label%3A%22help+wanted%22)):
-
-- [#5](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/5) **Checkerboard textures** on some rock surfaces. The Switch 2 GOB layout (f4f7b17) fixes the gold rock in the tutorial cave; the other surfaces still need a check.
-- [#6](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/6) **NVN 2 calls not recorded yet**: mesh shaders, VRS,
-  DLSS and others.
-- **Symbols.** Function names help debugging. They come from
-  [GRAnimated/DKBananza](https://github.com/GRAnimated/DKBananza), which welcomes contributions too.
-
-Your first contribution, step by step:
-
-1. Build from your own dump ([Building from source](#building-from-source)).
-2. Run it as in [docs/dkb-testing.md](docs/dkb-testing.md) and note how far it gets on your machine.
-3. Report it on #3 or #7, or pick an issue above.
-
-Before you open a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md). Its hard rule: nothing that came out of the
-game goes into the repository, not in commits, issues or pull requests. Run `python tools/check_content.py --staged`
-before committing; CI runs the same check. Questions go to
-[Discussions](https://github.com/Lucas-blip-png/dkb-pc-recomp/discussions). Everyone taking part follows the
-[code of conduct](CODE_OF_CONDUCT.md).
-
-## Support the project
-
-If you want to support the work without writing code, tips go to
-[ko-fi.com/lucasblippng](https://ko-fi.com/lucasblippng). A tip pays for time on the project; it buys no game files,
-builds or early access, and everything stays open source here. Starring the repository and sharing it with people who
-know GPUs, ARM64 or the Switch also helps.
+The longer version is in [docs/architecture.md](docs/architecture.md).
 
 ## Building from source
 
-The toolchain is TotK Recomp's ([docs/building.md](docs/building.md)): MSYS2 UCRT64 Clang, Ninja, Python 3.12 and the
-.NET SDK for the shader translator. With the Bananza ExeFS and RomFS from your own dump:
+The toolchain is the one TotK Recomp uses ([docs/building.md](docs/building.md)): Clang, Ninja, Python 3.12 and the .NET
+SDK for the shader translator. With the ExeFS and RomFS of update 1.1.1 from your own dump:
 
 ```
 .venv\Scripts\python tools\build_xlate.py
-.venv\Scripts\python recomp\gen.py --exefs <exefs> --out generated\dkb100 --modules main,sdk --patches recomp\patches-dkb100.txt
-.venv\Scripts\python tools\dkb_expected.py --exefs <exefs> --name dkb100 --display 1.0.0
-.venv\Scripts\python tools\dkb_pack_romfs.py --dir <romfs folder> --out build\extracted\dkb100\romfs
-.venv\Scripts\python tools\build_game.py --version dkb100 --expected tools\data\expected-dkb100.json --exefs <exefs> --romfs build\extracted\dkb100\romfs
+.venv\Scripts\python recomp\gen.py --exefs <exefs> --out generated\oot111 --modules main,subsdk0,sdk --patches recomp\patches-oot111.txt
+.venv\Scripts\python tools\build_game.py --version oot111 --expected tools\data\expected-oot111.json --exefs <exefs> --romfs <packed romfs>
 ```
 
-Everything the build writes stays under `build\` and `generated\`, which git ignores. The game uses about 13 GB of
-RAM, so 16 GB is the minimum for now. Running and testing: [docs/dkb-testing.md](docs/dkb-testing.md).
+After a translator build, copy `totk_xlate.exe` and `totk_xlate.id` from `build\xlate` next to `oot.exe`. A new
+translator also invalidates the shader cache, so the first entry into the world takes several minutes again.
 
-## FAQ
+Everything the build writes stays under `build\` and `generated\`, which git ignores. Plan for at least 32 GB of RAM:
+the test runs peaked at about 22 GB.
 
-**Can I play it?** Not yet. It reaches the tutorial and crashes often. Follow the
-[roadmap](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10) or the [devlog](docs/devlog.md).
+Some names still say `totk` or `DKB`, such as `totk.ini`, `TOTK_*` and `DKB_*` variables and `totk_xlate`. They are kept
+on purpose, so that merges from the upstream projects stay simple.
 
-**Will there be a download?** No. The executable is made from the game's own code, so it cannot be shared. Everyone
-builds it from their own dump; the installer does this for you ([docs/installer.md](docs/installer.md)).
+### Test switches
 
-**Which version of the game?** Base 1.0.0. Update 458752 has a different layout and is not supported yet.
+| Variable | Effect |
+| --- | --- |
+| `OOT_GPU_SYNC=1` / `=2` | Wait for the GPU at each present / each submit. |
+| `OOT_SKIP_STAGE=<hash>` | Drop draws of a program with this NVN 2 stage, to see what a pass adds. |
+| `OOT_CAM_LOG=<file>` | Log which camera each submission binds. |
+| `OOT_OCC_LOG=<file>` | Log samples-passed reports in a window of frames. |
+| `OOT_OCC_FORCE=<n>`, `OOT_OCC_HOLD=<n>` | Older occlusion tests. |
+| `OOT_MESH_LOG=1` | Count mesh draws and name their programs. |
+| `TOTK_DUMP=<frame>`, `TOTK_DUMP_TRIGGER=<file>` | Write a frame dump, at a frame number or when the file appears. |
 
-**Linux?** The runtime, lifter and build scripts are portable and the runtime, shader translator and game build on x86-64 Linux; [linux/README.md](linux/README.md) has the Bananza-specific steps. A Linux run on an NVIDIA GTX 1070 reached the tutorial, and the native geometry path fixes the black destructible terrain. Other GPUs and longer play sessions still need testing.
+## Contributing
 
-**Why GPL?** The shader lowering comes from Eglantine (Eden Emulator Project), which is GPL. Files that came from TotK
-Recomp keep their MIT terms.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Its hard rule: nothing that came out of the game goes into the repository,
+not in commits, issues or pull requests. Run `python tools/check_content.py --staged` before committing; CI runs the
+same check. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
-**How is AI used?** Most of the code and documentation is written by AI coding agents (Claude Code), as in TotK
-Recomp, and checked by running the game and the differential tests. AI-assisted pull requests are welcome; you are
-responsible for having read and run them.
+## Where this comes from
 
-## Credits
+This project stands on the work of others, and much of its code came from them unchanged:
 
-- [TotK Recomp](https://github.com/valentderah/totk-pc-recomp) by valentderah, the base of everything here, and the
-  projects it builds on: [LAS Recomp](https://github.com/peiikai/LASRecomp),
-  [MacNativeGames](https://github.com/ly05010419/MacNativeGames), [nxnative](https://github.com/seedds/nxnative),
-  [SavageWindRecomp](https://github.com/Revivedx/SavageWindRecomp), [Ryujinx](https://github.com/Ryujinx/Ryujinx),
-  [deko3d](https://github.com/devkitPro/deko3d), [hactool](https://github.com/SciresM/hactool) and the rest listed in
+- **[TotK Recomp](https://github.com/valentderah/totk-pc-recomp)** by valentderah, for *Tears of the Kingdom*: the
+  lifter, the Horizon host and the NVN and Vulkan runtime.
+- **[DKB Recomp](https://github.com/Lucas-blip-png/dkb-pc-recomp)** by Lucas-blip-png, for *Donkey Kong Bananza*: the step
+  to Switch 2, with NVN 2, Ampere shaders and the Switch 2 services. philneitz contributes there as well, and fixes from
+  that work are merged here. Its plan and notes are kept as history in
+  [docs/bananza-plan.md](docs/bananza-plan.md), [docs/bananza-shaders.md](docs/bananza-shaders.md) and
+  [docs/dkb-testing.md](docs/dkb-testing.md); the DKB build path (`dkb100`) is still in the tree.
+- **[Chiuauaa/oot-pc-recomp](https://github.com/Chiuauaa/oot-pc-recomp)**: the Ocarina of Time port this fork is based
+  on, with Zuriel-Zurichi's rendering work.
+- **[Lichii](https://github.com/zortos293/Lichii)** by zortos293 and
+  **[Eglantine](https://git.eden-emu.dev/Franseven/PokeDinner-a-Eglantine-Fork)** (Eden Emulator Project): the
+  Ampere-to-Maxwell shader lowering and many findings about this game.
+- [Mesa NAK](https://gitlab.freedesktop.org/mesa/mesa) for the SM70+ encodings,
+  [LAS Recomp](https://github.com/peiikai/LASRecomp), [MacNativeGames](https://github.com/ly05010419/MacNativeGames),
+  [nxnative](https://github.com/seedds/nxnative), [SavageWindRecomp](https://github.com/Revivedx/SavageWindRecomp),
+  [Ryujinx](https://github.com/Ryujinx/Ryujinx), [deko3d](https://github.com/devkitPro/deko3d),
+  [hactool](https://github.com/SciresM/hactool), [Switchbrew](https://switchbrew.org) and the rest listed in
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- [GRAnimated/DKBananza](https://github.com/GRAnimated/DKBananza) for the game's symbols and research.
-- [Eglantine](https://git.eden-emu.dev/Franseven/PokeDinner-a-Eglantine-Fork) (Eden Emulator Project) for the
-  Ampere-to-Maxwell shader lowering and its Switch 2 notes, and [Mesa NAK](https://gitlab.freedesktop.org/mesa/mesa)
-  for the SM70+ encodings both build on.
-- [libvpx](https://chromium.googlesource.com/webm/libvpx) for the movies.
-- [Switchbrew](https://switchbrew.org) for the Switch 2 `GetInfo` ids, and the Switch homebrew community.
+
+Most of the code and documentation here is written by AI coding agents (Claude Code), as in the projects above, and
+checked by running the game.
 
 ## License
 
-DKB Recomp as a whole is under the [GNU GPL v3 or later](LICENSE), because it includes Eglantine's GPL Ampere shader
+OoT Recomp as a whole is under the [GNU GPL v3 or later](LICENSE), because it includes Eglantine's GPL Ampere shader
 lowering (`runtime/third_party/eglantine/`). The files that came from TotK Recomp keep their
 [MIT License](LICENSE-MIT); third-party code keeps its own license ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 The license grants nothing for Nintendo's game.
 
-DKB Recomp is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *Donkey Kong
-Bananza* and *Nintendo Switch 2* are trademarks of Nintendo.
+OoT Recomp is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo. *The Legend of
+Zelda: Ocarina of Time* and *Nintendo Switch 2* are trademarks of Nintendo.

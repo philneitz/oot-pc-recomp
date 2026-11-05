@@ -1,6 +1,6 @@
-# DKB Recomp
+# OoT Recomp
 
-Static recompilation of *Donkey Kong Bananza* (Switch 2, ARM64, base 1.0.0) into a native Windows x86-64 exe with a Vulkan renderer, built on TotK Recomp (*Tears of the Kingdom*, Switch 1). Most of the lifter, host and Vulkan back end is TotK Recomp's; the Bananza-specific parts are the NVN 2 front end (`runtime/nvn_api_nvn2.c` and the NVN 2 paths in `runtime/gfx_shader.c`), the Ampere shader lowering (`runtime/nvn2_lower.cpp`, `runtime/third_party/eglantine/`) and the `nn::codec` movie decoder (`runtime/ov_codec.c`). Design: [docs/architecture.md](docs/architecture.md). Plan: [docs/bananza-plan.md](docs/bananza-plan.md). Shader notes: [docs/bananza-shaders.md](docs/bananza-shaders.md). Toolchain, build commands and tests: [docs/building.md](docs/building.md). Running and testing Bananza: [docs/dkb-testing.md](docs/dkb-testing.md).
+Static recompilation of *The Legend of Zelda: Ocarina of Time* (Switch 2, ARM64, update 1.1.1) into a native Windows x86-64 exe with a Vulkan renderer, built on DKB Recomp (*Donkey Kong Bananza*, Switch 2) and TotK Recomp (*Tears of the Kingdom*, Switch 1), whose names remain in parts of the code. Most of the lifter, host and Vulkan back end is TotK Recomp's; the Bananza-specific parts are the NVN 2 front end (`runtime/nvn_api_nvn2.c` and the NVN 2 paths in `runtime/gfx_shader.c`), the Ampere shader lowering (`runtime/nvn2_lower.cpp`, `runtime/third_party/eglantine/`) and the `nn::codec` movie decoder (`runtime/ov_codec.c`). Design: [docs/architecture.md](docs/architecture.md). Plan: [docs/bananza-plan.md](docs/bananza-plan.md). Shader notes: [docs/bananza-shaders.md](docs/bananza-shaders.md). Toolchain, build commands and tests: [docs/building.md](docs/building.md). Running and testing Bananza: [docs/dkb-testing.md](docs/dkb-testing.md).
 
 ## Game content boundary
 
@@ -16,7 +16,7 @@ This repository is public. Game data lives outside it and every derived file sta
 `refs/` holds the upstream checkouts (`tools/fetch_refs.sh` recreates it). Read-only.
 
 - Copy only MIT, BSD, ISC, zlib or Apache-2.0 code, keep its header, and add a row to `THIRD_PARTY_NOTICES.md`.
-- DKB Recomp is GPL-3.0-or-later as a whole (LICENSE), because it carries Eglantine's GPL Ampere lowering
+- OoT Recomp is GPL-3.0-or-later as a whole (LICENSE), because it carries Eglantine's GPL Ampere lowering
   (`runtime/third_party/eglantine/`, with the owner's go-ahead). GPL-3.0-compatible code (Eden, Eglantine, yuzu and
   the like) may be copied with its header kept, a row in `THIRD_PARTY_NOTICES.md` and the upstream commit. Files that
   came from TotK Recomp keep their MIT terms (`LICENSE-MIT`); a fix meant for TotK Recomp itself must not use GPL code.

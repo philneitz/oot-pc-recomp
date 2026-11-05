@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Question or help with building
-    url: https://github.com/Lucas-blip-png/dkb-pc-recomp/discussions
-    about: Building, running and how the port works. Ask in Discussions.
-  - name: Roadmap and open tasks
-    url: https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10
+  - name: Building
+    url: https://github.com/philneitz/oot-pc-recomp/blob/oot/merged/docs/building.md
+    about: How to build and run it.
+  - name: Status and open problems
+    url: https://github.com/philneitz/oot-pc-recomp/blob/oot/merged/docs/oot-status.md
     about: What is done, what is open, and where a contribution helps most.
