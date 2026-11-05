@@ -20,7 +20,7 @@
 // as x/2+1/2, UNORM and sRGB bytes written as stored. Caps: MAX_PASSES passes copied, PNG_CAP bytes of PNGs.
 // TOTK_DUMP_TEX=<id>|<w>x<h>[,...]: those texture slots, or 2D textures of that size, are copied where first sampled,
 // whatever their format.
-// TOTK_DUMP_UBO=1: each listed pipeline also prints the first 16 vec4 of its user uniform blocks (c3 and up), read from
+// TOTK_DUMP_UBO=1: each listed pipeline also prints the first 16 vec4 (=<n>: n vec4) of its user uniform blocks (c3 and up), read from
 // guest memory when the entry is listed. A block the submission rewrites with UpdateUniformBuffer shows its value from
 // before the submission (vk_exec_draw.c upd_note).
 // TOTK_DUMP_SKIP_RUNS=1: a render pass with the same targets as the render pass before it is logged but not copied
@@ -601,6 +601,19 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
                 if (ex->ssbo[st][k].addr)
                     sp(b, " %d=%#llx+%#llx", k, (unsigned long long)ex->ssbo[st][k].addr, (unsigned long long)ex->ssbo[st][k].size);
             sp(b, "\n");
+            if (dump_ubo && st == 1 && r->handle * 4 == 0x510) {   // the head of the fragment stage's first storage buffer
+                const p_bind_buf *u = &ex->ssbo[st][0];
+                VkMemSpan ms;
+                if (u->addr && vk_mem_resolve(u->addr, 1, &ms)) {
+                    const float *f = (const float *)(uintptr_t)u->addr;
+                    uint64_t n = u->size && u->size < ms.avail ? u->size : ms.avail;
+                    sp(b, "    fs ssbo0 data");
+                    for (uint64_t k = 0; k < 12 && (k + 1) * 16 <= n; k++)
+                        sp(b, "%s[%llu] %g %g %g %g", k % 4 ? " " : "\n      ", (unsigned long long)k, f[4 * k], f[4 * k + 1],
+                           f[4 * k + 2], f[4 * k + 3]);
+                    sp(b, "\n");
+                }
+            }
             continue;
         }
         if (r && bd->kind == GFX_RES_UBO && dump_ubo && r->slot >= 3 && r->slot - 3 < 18) {
@@ -611,7 +624,7 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
             if (u->addr && vk_mem_resolve(u->addr, 1, &ms)) {
                 uint64_t n = u->size && u->size < ms.avail ? u->size : ms.avail;
                 const float *f = (const float *)(uintptr_t)u->addr;
-                for (uint64_t k = 0; k < 16 && (k + 1) * 16 <= n; k++)
+                for (uint64_t k = 0; k < (uint64_t)(dump_ubo > 1 ? dump_ubo : 16) && (k + 1) * 16 <= n; k++)
                     sp(b, "%s[%llu] %g %g %g %g", k % 4 ? " " : "\n      ", (unsigned long long)k, f[4 * k], f[4 * k + 1],
                        f[4 * k + 2], f[4 * k + 3]);
             } else {
@@ -750,6 +763,7 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
     sp(&b, "vs %016llx fs %016llx prog %llu prim %d", (unsigned long long)shader_hash(s->vs),
        (unsigned long long)shader_hash(s->fs), (unsigned long long)(ex->prog ? ex->prog->serial : 0), s->prim);
     sp(&b, " depth test %d write %d func %d alpha %d ref %.3f blend %#x", (int)s->ds.dt, (int)s->ds.dw, (int)s->ds.df, (int)s->color.alpha_func, s->alpha_ref, (unsigned)s->color.blend_en);
+    sp(&b, " wmask0 %#x", (unsigned)vk_pipeline_target_wmask(s, 0));
     for (uint32_t k = 0; ex->prog && k < ex->prog->nstage && k < 6; k++) {   // NVN 2 stages: their DKB_SHADER_DUMP names
         uint64_t o = nvn2_origin((const uint8_t *)(uintptr_t)ex->prog->sd[k].data);
         if (o) sp(&b, " nvn2 %016llx", (unsigned long long)o);
@@ -954,7 +968,7 @@ void vk_dump_init(void) {
     const char *sr = cfg_get("TOTK_DUMP_SKIP_RUNS");
     skip_runs = sr && *sr && *sr != '0';
     const char *du = cfg_get("TOTK_DUMP_UBO");
-    dump_ubo = du && *du && *du != '0';
+    dump_ubo = du && *du ? atoi(du) : 0;
     const char *wt = cfg_get("TOTK_DUMP_TEX");
     for (char *q = (char *)wt; q && *q && nwant_tex < 16; q += *q == ',') {
         uint32_t *w = want_tex[nwant_tex++];

@@ -92,6 +92,7 @@ struct GfxShader {
     uint8_t key[32];
     uint8_t iid[32];                                       // input id (see the keys at the top)
     uint32_t *spirv;
+    int spv_checked;                                       // OOT_SPV_OVERRIDE looked for this shader's file
     uint64_t words;
     char *reflection;                                      // the service's .res.json text, parsed into the fields below
     uint64_t reflection_size;
@@ -2345,7 +2346,38 @@ void gfx_shader_prewarm(const uint8_t (*iids)[32], size_t n, const GfxShader **o
            (unsigned long long)((uint64_t)n_failures - fail0), procs, k, (double)plat_now_ms() - t0);
     free(w.other);
 }
+// OOT_SPV_OVERRIDE=<dir>: a shader with a <dir>/sh_<hash>.spv (the hash vk_dump names it by) is replaced by that file,
+// to look at a shader's intermediate values. Diagnostic only; the original stays allocated.
+static void spv_override(GfxShader *s) {
+    const char *dir = getenv("OOT_SPV_OVERRIDE");
+    if (!dir || !*dir || !s->spirv) { s->spv_checked = 1; return; }
+    uint64_t h = 0xcbf29ce484222325ull;
+    const uint8_t *b = (const uint8_t *)s->spirv;
+    for (uint64_t i = 0; i < s->words * 4; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+    char path[600];
+    snprintf(path, sizeof path, "%s/sh_%016llx.spv", dir, (unsigned long long)h);
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        uint32_t *o = n >= 20 && !(n & 3) ? malloc((size_t)n) : NULL;
+        if (o && fread(o, 1, (size_t)n, f) == (size_t)n) {
+            s->spirv = o, s->words = (uint64_t)n / 4;
+            rt_log("gfx_shader: OOT_SPV_OVERRIDE replaced %016llx", (unsigned long long)h);
+        }
+        fclose(f);
+    }
+    s->spv_checked = 1;
+}
+
 const uint32_t *gfx_shader_spirv(const GfxShader *s, uint64_t *words) {
+    static volatile long lock;
+    if (!__atomic_load_n(&s->spv_checked, __ATOMIC_ACQUIRE)) {
+        while (__atomic_exchange_n(&lock, 1, __ATOMIC_ACQUIRE)) {}
+        if (!s->spv_checked) spv_override((GfxShader *)s);
+        __atomic_store_n(&lock, 0, __ATOMIC_RELEASE);
+    }
     if (words) *words = s->words;
     return s->spirv;
 }
