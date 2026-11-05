@@ -4,6 +4,7 @@
 // in swkbd_win.c.
 #include <stdint.h>
 #include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include <opus/opus.h>
@@ -171,6 +172,7 @@ static void ov_decode(Cpu *c) {
     Decoder *d = acquire(guest, "DecodeOpusInterleavedWithHardware");
     size_t capacity = out_size / (sizeof(int16_t) * (size_t)d->channels);
     if (capacity > INT_MAX) { release(d); ret_x(c, CODEC_R_INVALID); return; }
+    int channels = d->channels;
     int got = opus_decode(d->dec, in + 8, (opus_int32)n, out, (int)capacity, 0);
     opus_uint32 final = 0;
     if (got >= 0) opus_decoder_ctl(d->dec, OPUS_GET_FINAL_RANGE(&final));
@@ -184,6 +186,21 @@ static void ov_decode(Cpu *c) {
         rt_log("nn::codec: Opus final range %#x != stream %#x (logged once)", (unsigned)final, (unsigned)range);
     *consumed = 8 + n;
     *samples = got;
+    if (rt_trace & RT_TRACE_AUDIO) {   // is decoded voice data silent? one line per 2000 packets of all decoders
+        static uint64_t packets;
+        static double energy, count, peak;
+        for (int i = 0; i < got * channels; i++) {
+            double s = out[i] / 32768.0;
+            energy += s * s;
+            count += 1;
+            if (s > peak) peak = s;
+            if (-s > peak) peak = -s;
+        }
+        if (++packets % 2000 == 0) {
+            rt_log("nn::codec: Opus %llu packets, last 2000: rms %.4f peak %.4f", (unsigned long long)packets, count ? sqrt(energy / count) : 0.0, peak);
+            energy = count = peak = 0;
+        }
+    }
     ret_x(c, 0);
 }
 
