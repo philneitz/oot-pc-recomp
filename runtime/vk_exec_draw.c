@@ -1090,7 +1090,17 @@ static int bind_range(VkExec *ex, uint64_t addr, uint64_t size, uint64_t align, 
     if (sp.offset % align == 0) {
         VK_MEM_USE(sp);
         *out = (VkDescriptorBufferInfo){sp.buffer, sp.offset, n};
-        if (written) vk_mem_gpu_wrote(&sp, n), vk_usnap_drop(addr, n);
+        if (written) {
+            // OOT_USNAP_KEEP=1: a storage binding a shader may write leaves the uniform copies alone. It can span whole
+            // regions of per-object blocks; dropping those made draws after a dispatch read newer matrices than draws before it.
+            static int keep = -1;
+            if (keep < 0) {
+                keep = getenv("OOT_USNAP_KEEP") != NULL;
+                if (keep) rt_log("vk_usnap: OOT_USNAP_KEEP: storage writes keep the uniform copies");
+            }
+            vk_mem_gpu_wrote(&sp, n);
+            if (!keep) vk_usnap_drop(addr, n);
+        }
         count_use(sp.cls, use, n);
         VK_MEM_BOUND(sp);
         return 1;
