@@ -2426,7 +2426,7 @@ typedef struct {
 // family, and the same SPIR-V drawn on its own does not fault, so the cause is still open. Skipping these draws
 // loses those lights; the family's quads without an input at Location 9 draw as before. It is a mitigation, not a fix:
 // in 600 s runs on an RTX 5060 Ti the fault came minutes later in one run of two (another shader), where without it
-// every run faulted right after the first guide movie. TOTK_FIX_VS_FAULT=0 draws them.
+// every run faulted right after the first guide movie. Off unless TOTK_FIX_VS_FAULT=1.
 //
 // The later fault, around seven minutes in, comes from one more quad of the same shape whose fragment stage does not
 // read c0+0x530: NVN 2 vertex stage cae0ef8e9fe9147f, nine per-instance RGBA32F streams, one instance. In 9 runs of
@@ -2473,7 +2473,12 @@ static int stage_diag_skip(const VkExec *ex, const GfxShader *vs) {
 
 static int light_quad_fault_skip(const VkExec *ex, const GfxShader *vs, const GfxShader *fs) {
     static int on = -1;
-    if (on < 0) on = !rt_game_version && cfg_bool("TOTK_FIX_VS_FAULT") && vk_ctx()->props.vendorID == 0x10de;   // 0: Bananza
+    // Inherited from Bananza, where these quads lost the device on NVIDIA. Ocarina draws ordinary world materials through
+    // the same shape, so the filter would drop them. Off unless TOTK_FIX_VS_FAULT=1 asks for it.
+    if (on < 0) {
+        const char *e = getenv("TOTK_FIX_VS_FAULT");
+        on = !rt_game_version && e && *e == '1' && vk_ctx()->props.vendorID == 0x10de;   // 0: Bananza
+    }
     if (!on || !vs || !fs) return 0;
     const uint8_t *ctl, *code = NULL;
     uint32_t len;
@@ -2486,7 +2491,7 @@ static int light_quad_fault_skip(const VkExec *ex, const GfxShader *vs, const Gf
     for (int i = 0; i < n; i++) lights |= r[i].cbuf_slot == 0 && r[i].handle * 4 == 0x530;
     GfxShaderIo io[32];
     if (!lights || !(gfx_shader_inputs(vs, io) >> 9 & 1)) return 0;
-    warn_once(W_FAULT_SKIP, "light-quad draws with ten instance streams are skipped on NVIDIA (#9; TOTK_FIX_VS_FAULT=0 draws them)");
+    warn_once(W_FAULT_SKIP, "light-quad draws with ten instance streams are skipped on NVIDIA (#9; asked for by TOTK_FIX_VS_FAULT=1)");
     return 1;
 }
 
