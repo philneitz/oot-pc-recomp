@@ -138,7 +138,7 @@ def vma_include():
 
 # --toolchain: an llvm-mingw tree. The libraries, headers and DLLs MSYS2 supplies come from the deps directory instead.
 LLVM_LINK_LIBS = ['-lpsapi', '-lbcrypt', '-luser32', '-lgdi32', '-ldwmapi', '-limm32', '-lwinmm', '-lvulkan-1', '-lSDL3', '-lopus',
-                  '-l:libvpx.a', '-l:libzstd.a', '-l:libc++.a', '-l:libc++abi.a', '-l:libunwind.a', '-l:libwinpthread.a']
+                  '-l:libvpx.a', '-l:libdav1d.a', '-l:libzstd.a', '-l:libc++.a', '-l:libc++abi.a', '-l:libunwind.a', '-l:libwinpthread.a']
 DEFAULT_DEPS = ROOT / 'toolchain' / 'deps-mingw'
 # Runtime sources compiled per install, not in the library: romfs.c includes romfs_config.h, patches.c and ov_zstd.c
 # the patches.h of the player's game version (its patch page is the page after that version's main; ov_zstd.c's host

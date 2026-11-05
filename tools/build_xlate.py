@@ -97,8 +97,8 @@ def verify_vendor() -> None:
 
 def selected_patches(*, defined_float_minmax: bool = False) -> list[Path]:
     patches = sorted((XLATE / "patches").glob("*.patch"))
-    if len(patches) != 19:
-        sys.exit(f"expected 19 patches, found {len(patches)}")
+    if len(patches) != 20:
+        sys.exit(f"expected 20 patches, found {len(patches)}")
     optional = XLATE / "patches" / DEFINED_FLOAT_MINMAX_PATCH
     if optional not in patches:
         sys.exit(f"missing optional patch: {DEFINED_FLOAT_MINMAX_PATCH}")
@@ -122,7 +122,44 @@ def prepare_sources(*, defined_float_minmax: bool = False) -> Path:
             if r.returncode != 0:
                 sys.exit(f"patch does not apply: {patch.name}\n{r.stdout}{r.stderr}")
         print(f"applied {patch.name}")
+    apply_fmz_experiment(src)
     return src
+
+
+def apply_fmz_experiment(src: Path) -> None:
+    """EXPERIMENT, carried over from the user's Bananza fun build, not for upstream: Maxwell's FMZ rule on every FP32
+    multiply, 0 x anything = 0. There it keeps the GPU fault (DKB #9) away where other fixes didn't; for Ocarina of Time
+    this is untested."""
+    path = src / "src" / "Ryujinx.Graphics.Shader" / "Translation" / "EmitterContextInsts.cs"
+    text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+    changes = [
+        ('''            return context.Add(fpType | Instruction.FusedMultiplyAdd, Local(), a, b, c);
+''', '''            if (fpType == Instruction.FP32)
+            {
+                Operand fmzZero = context.Add(Instruction.LogicalOr, Local(), context.FPCompareEqual(a, ConstF(0.0f)), context.FPCompareEqual(b, ConstF(0.0f)));
+                Operand fmzResult = context.Add(fpType | Instruction.FusedMultiplyAdd, Local(), a, b, c);
+                return context.ConditionalSelect(fmzZero, c, fmzResult);
+            }
+
+            return context.Add(fpType | Instruction.FusedMultiplyAdd, Local(), a, b, c);
+'''),
+        ('''            return context.Add(fpType | Instruction.Multiply, Local(), a, b);
+''', '''            if (fpType == Instruction.FP32)
+            {
+                Operand fmzZero = context.Add(Instruction.LogicalOr, Local(), context.FPCompareEqual(a, ConstF(0.0f)), context.FPCompareEqual(b, ConstF(0.0f)));
+                Operand fmzResult = context.Add(fpType | Instruction.Multiply, Local(), a, b);
+                return context.ConditionalSelect(fmzZero, ConstF(0.0f), fmzResult);
+            }
+
+            return context.Add(fpType | Instruction.Multiply, Local(), a, b);
+'''),
+    ]
+    for old, new in changes:
+        if text.count(old) != 1:
+            sys.exit(f"FMZ experiment does not apply: {old.strip()}")
+        text = text.replace(old, new)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    print("applied the FMZ experiment")
 
 
 def identity(*, defined_float_minmax: bool = False) -> str:
