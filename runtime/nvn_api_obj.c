@@ -790,6 +790,12 @@ NVN_API(nvnQueuePresentTexture) {
         rt_fatal("nvn: QueuePresentTexture of image %d on window %p", idx, (void *)o);
     o->presents++;
     const tex_t *t = (const tex_t *)o->tex[idx];
+    extern int nvn_gpu_sync(void);
+    extern uint64_t nvn_fence_last(void);
+    if (nvn_gpu_sync() == 1) {   // nvn_api_core.c
+        uint64_t f = nvn_fence_last();
+        if (f && gfx_backend()->fence_done() < f) gfx_backend()->fence_wait(f, 200000000ull);
+    }
     uint64_t period = present_period(o), now = kern_now_ns();
     uint64_t slot = now + pace(&o->pace, now, period);
     gfx_backend()->present(t, o->crop, slot);

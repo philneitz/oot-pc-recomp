@@ -16,6 +16,7 @@
 // usnap_drop; MIT, Copyright (c) 2026 jhaizhou); the code is ours.
 // The copy is taken where vk_exec_record starts: at the submit call when the replay runs on the submitting thread, later
 // with TOTK_REPLAY_ASYNC. TOTK_UBO_SNAPSHOT=0 binds live memory as before; =ab alternates (TOTK_AB).
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -299,6 +300,52 @@ void vk_usnap_drop(uint64_t addr, uint64_t n) {
 }
 
 uint64_t vk_usnap_gen(void) { return U.gen; }
+
+// OOT_CAM_LOG=<file>: which camera each submission's draws get. The game's view blocks are uniform blocks of 0x3500 or
+// 0x3c0 bytes whose first three vec4 are the view matrix's rows. One line per submission, block and source (a block that
+// changes source within a submission gets a second line): the fence, the fences done, address, the source the replay
+// binds (snap: the copy of the submit call, mem: the pool's memory), the translation in that source and in guest memory
+// now. "present" lines mark the frames. Cheap enough not to change the timing it is meant to look at.
+static FILE *cam_f;
+static int cam_state;   // 0 not read, 1 on, -1 off
+
+static int cam_on(void) {
+    if (!cam_state) {
+        const char *e = getenv("OOT_CAM_LOG");
+        cam_f = e && *e ? fopen(e, "w") : NULL;
+        cam_state = cam_f ? 1 : -1;
+    }
+    return cam_state > 0;
+}
+
+void vk_camlog_bind(uint64_t addr, uint64_t size, int stage, int slot, int from_snapshot) {
+    if ((size != 0x3500 && size != 0x3c0) || addr >= 0x8000000000ull) return;   // above: GPU memory, no CPU view
+    if (!cam_on()) return;
+    static uint64_t seen[64], seen_fence;
+    static int nseen;
+    if (seen_fence != U.fence) seen_fence = U.fence, nseen = 0;
+    uint64_t key = addr | (uint64_t)(from_snapshot != 0);   // blocks are aligned: bit 0 is free
+    for (int i = 0; i < nseen; i++) if (seen[i] == key) return;
+    if (nseen == 64) return;
+    seen[nseen++] = key;
+    float live[12], src[12];
+    memcpy(live, (const void *)(uintptr_t)addr, sizeof live);
+    memcpy(src, live, sizeof src);
+    if (from_snapshot) {
+        int i = first_above(addr);
+        if (U.on && i < U.nreg && addr >= U.reg[i].lo && addr + sizeof src <= U.reg[i].hi)
+            memcpy(src, U.arena->map + U.reg[i].off + (addr - U.reg[i].lo), sizeof src);
+    }
+    fprintf(cam_f, "f %llu done %llu %#llx st %d c%d %s row0 %.4f %.4f %.4f t %.3f %.3f %.3f live %.3f %.3f %.3f\n",
+            (unsigned long long)U.fence, (unsigned long long)vk_sync_fence_done(), (unsigned long long)addr, stage, slot,
+            from_snapshot ? "snap" : "mem", src[0], src[1], src[2], src[3], src[7], src[11], live[3], live[7], live[11]);
+}
+
+void vk_camlog_present(uint64_t frame) {
+    if (cam_state <= 0) return;
+    fprintf(cam_f, "present %llu t %.3f\n", (unsigned long long)frame, kern_now_ns() / 1e6);
+    fflush(cam_f);
+}
 
 // The arenas back on the free list (vk_exec_draw_shutdown: the device is idle, every completion ran).
 void vk_usnap_shutdown(void) {

@@ -1245,8 +1245,10 @@ static VkDescriptorBufferInfo ubo_info(VkExec *ex, int st, int slot) {
         const p_bind_buf *b = &ex->ubo[st][slot - 3];
         if (b->size && vk_usnap_find(b->addr, b->size < max ? b->size : max, align, &bi)) {   // as of the submit call
             count_use(VK_MCLS_SCRATCH, VK_MUSE_UBO, bi.range);
+            vk_camlog_bind(b->addr, b->size, st, slot, 1);
             return bi;
         }
+        if (b->size) vk_camlog_bind(b->addr, b->size, st, slot, 0);
         if (bind_range(ex, b->addr, b->size, align, max, VK_MUSE_UBO, 0, 0, &bi)) return bi;
     }
     return zero_info(max);
@@ -2622,6 +2624,7 @@ unsupported:
 
 // Pass, shaders, pipeline, fixed state and resources for a draw. 0: the draw is skipped.
 static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
+    if (vk_exec_oq_logging()) vk_exec_oq_attempt();
     if (ex->render_disabled) return 0;
     static int skip_all = -1;   // DKB_SKIP_DRAWS=1: drop every draw (bisecting GPU faults)
     if (skip_all < 0) skip_all = getenv("DKB_SKIP_DRAWS") != NULL;
@@ -2798,6 +2801,9 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     bind_vertex_buffers(ex);
     if (vk_dump_armed) vk_dump_draw(ex, &s, p, info);
     vk_exec_oq_draw(ex);
+    if (vk_exec_oq_logging())
+        vk_exec_oq_state(ex->prog && ex->prog->nstage ? nvn2_origin((const uint8_t *)(uintptr_t)ex->prog->sd[0].data) : 0,
+                         (int)s.ds.dt, (int)s.ds.dw, (int)s.ds.df);
     return 1;
 }
 

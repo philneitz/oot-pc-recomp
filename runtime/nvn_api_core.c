@@ -622,6 +622,7 @@ static uint64_t lod_entered, lod_issued, lod_fence[LOD_RING];
 // core given up (section 2.2), or queued for the replay thread (TOTK_REPLAY_ASYNC, vk_backend.c); the newest fence
 // value is what QueueFenceSync records. With the queue the fence covers replay and GPU, so the LOD guard below waits
 // for both.
+int nvn_gpu_sync(void);
 NVN_API(nvnQueueSubmitCommands) {
     queue_t *q = arg_p(c, 0);
     uint64_t submitted = rt_ticks();
@@ -650,6 +651,19 @@ NVN_API(nvnQueueSubmitCommands) {
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
     __atomic_store_n(&lod_issued, no, __ATOMIC_SEQ_CST);
+    if (nvn_gpu_sync() >= 2 && gfx_backend()->fence_done() < f) gfx_backend()->fence_wait(f, 200000000ull);
+}
+
+// OOT_GPU_SYNC=1: every present waits until the GPU finished what was submitted before it; =2: every submit does. To test
+// whether the white flashes and the camera going back and forth need work queued on the GPU. Waits at most 200 ms.
+int nvn_gpu_sync(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("OOT_GPU_SYNC");
+        v = e && *e ? atoi(e) : 0;
+        if (v) rt_log("nvn: OOT_GPU_SYNC=%d: waiting for the GPU at every %s", v, v >= 2 ? "submit" : "present");
+    }
+    return v;
 }
 
 // The producer (1.2.1 main f_70008c6460) releases the read lock on obj+0x538 at lr 0x70008c70c8; when

@@ -149,7 +149,42 @@ static uint32_t oq_nseg, oq_capseg;
 static int oq_lost;                      // replay: the segment missed a draw (ring full)
 static uint64_t oq_count;                // completion thread: samples since the last reset
 
-typedef struct { uint64_t addr; int reset, lost; uint32_t n; uint32_t q[]; } OqSegment;
+typedef struct {
+    uint64_t addr, fence, vs;
+    int reset, lost;
+    uint32_t attempts, counted;   // OOT_OCC_LOG: draws the replay was given in the segment, draws it recorded
+    int dt, dw, df;               // OOT_OCC_LOG: depth state of the segment's first recorded draw
+    uint32_t n;
+    uint32_t q[];
+} OqSegment;
+
+// OOT_OCC_LOG=<file>: one line per samples-passed report in a window of 120 frames out of every 1200 (the fence moves
+// about 7 per frame; a line for all of them would be 3 MB/s): the fence, the report's address, the draws it was given and
+// recorded (a draw left out adds nothing, so it can read 0 for what never ran), the queries, the count, the first draw's
+// vertex stage and depth state. To tell a real 0 from one of ours and to see one address's values over time.
+static uint32_t oq_attempts, oq_counted;
+static uint64_t oq_first_vs;
+static int oq_first_dt, oq_first_dw, oq_first_df;
+static FILE *oq_log;
+static int oq_log_state;   // 0 not read, 1 on, -1 off
+
+int vk_exec_oq_logging(void) {
+    if (!oq_log_state) {
+        const char *e = getenv("OOT_OCC_LOG");
+        oq_log = e && *e ? fopen(e, "w") : NULL;
+        oq_log_state = oq_log ? 1 : -1;
+    }
+    return oq_log_state > 0;
+}
+
+void vk_exec_oq_attempt(void) {
+    if (oq_counting) oq_attempts++;
+}
+
+void vk_exec_oq_state(uint64_t vs, int dt, int dw, int df) {
+    if (!oq_counting) return;
+    if (!oq_counted++) oq_first_vs = vs, oq_first_dt = dt, oq_first_dw = dw, oq_first_df = df;
+}
 
 static int oq_ready(void) {
     if (oq_state) return oq_state > 0;
@@ -285,6 +320,13 @@ static void oq_cb(void *arg) {
             rt_log("vk: samples-passed reports %llu: %llu read 0, %llu held at 1, %llu to no CPU-visible memory, largest %llu", (unsigned long long)st_reports,
                    (unsigned long long)st_zero, (unsigned long long)st_held, (unsigned long long)st_gpu, (unsigned long long)st_max);
         }
+        if (oq_log_state > 0 && s->fence % 8400 < 840) {
+            static unsigned lines;
+            fprintf(oq_log, "f %llu %#llx a %u c %u q %u count %llu vs %016llx d %d %d %d\n", (unsigned long long)s->fence,
+                    (unsigned long long)s->addr, s->attempts, s->counted, s->n, (unsigned long long)oq_count,
+                    (unsigned long long)s->vs, s->dt, s->dw, s->df);
+            if (!(++lines & 1023)) fflush(oq_log);
+        }
         if (s->addr) write_counter(s->addr, out);
     }
     free(s);
@@ -296,6 +338,9 @@ static void oq_segment(VkExec *ex, uint64_t addr, int reset) {
     OqSegment *s = malloc(sizeof *s + sizeof *s->q * oq_nseg);
     if (!s) rt_fatal("vk: out of memory");
     s->addr = addr, s->reset = reset, s->lost = oq_lost, s->n = oq_nseg;
+    s->fence = ex->fence, s->attempts = oq_attempts, s->counted = oq_counted, s->vs = oq_first_vs;
+    s->dt = oq_first_dt, s->dw = oq_first_dw, s->df = oq_first_df;
+    oq_attempts = oq_counted = 0, oq_first_vs = 0;
     memcpy(s->q, oq_seg, sizeof *s->q * oq_nseg);
     oq_nseg = 0, oq_lost = 0;
     vk_completion_add(ex->fence, oq_cb, s);
