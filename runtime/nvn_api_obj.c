@@ -790,6 +790,15 @@ NVN_API(nvnQueuePresentTexture) {
         rt_fatal("nvn: QueuePresentTexture of image %d on window %p", idx, (void *)o);
     o->presents++;
     const tex_t *t = (const tex_t *)o->tex[idx];
+    static int present_log = -1, last_crop[4], last_w, last_h;
+    if (present_log < 0) present_log = getenv("OOT_PRESENT_LOG") != NULL;
+    if (present_log && (last_w != (int)t->d.width || last_h != (int)t->d.height ||
+                        memcmp(last_crop, o->crop, sizeof last_crop))) {
+        rt_log("nvn: present image %ux%u crop %d,%d %dx%d", t->d.width, t->d.height,
+               o->crop[0], o->crop[1], o->crop[2], o->crop[3]);
+        last_w = (int)t->d.width, last_h = (int)t->d.height;
+        memcpy(last_crop, o->crop, sizeof last_crop);
+    }
     extern int nvn_gpu_sync(void);
     extern uint64_t nvn_fence_last(void);
     if (nvn_gpu_sync() == 1) {   // nvn_api_core.c
@@ -802,5 +811,5 @@ NVN_API(nvnQueuePresentTexture) {
     o->ticket[idx] = o->presents;
     o->avail[idx] = slot + period;
     frame_step_present(slot, o->interval);   // frame_rate.c: the real-time step follows the display times
-    rt_frame_presented(t, o->presents);
+    rt_frame_presented(t, o->crop, o->presents);
 }

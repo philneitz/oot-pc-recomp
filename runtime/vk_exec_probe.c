@@ -846,19 +846,50 @@ static int test_mirror(const GfxBackend *b, uint8_t *guest, int *bytes) {
 }
 
 // A uniform binding survives a submission boundary even when the following stream contains no bind op.
-typedef struct { uint64_t addr; int inherited, dropped; } SnapshotProbe;
+typedef struct { uint64_t addr; int inherited, dropped, adjacent, intervals, pending; } SnapshotProbe;
 
 static void snapshot_probe_work(VkExec *ex, void *context) {
     SnapshotProbe *p = context;
-    VkDescriptorBufferInfo bi;
-    p->inherited = vk_usnap_find(p->addr, 64, 256, &bi);
-    vk_usnap_drop(p->addr, 64);
-    p->dropped = !vk_usnap_find(p->addr, 64, 256, &bi);
+    VkDescriptorBufferInfo bi = {0};
+    p->inherited = vk_usnap_find(p->addr, 256, 256, &bi);
+    VkDeviceSize base = bi.offset;
+    vk_usnap_drop(p->addr + 64, 64);
+    p->dropped = !vk_usnap_find(p->addr, 256, 256, &bi);
+    p->adjacent = vk_usnap_find(p->addr + 256, 256, 256, &bi);
+    p->intervals = p->adjacent && bi.offset == base + 256;
+    vk_usnap_drop(p->addr + 448, 32);
+    vk_usnap_drop(p->addr + 416, 32);   // descending insertion, then adjacency merging
+    p->intervals &= !vk_usnap_find(p->addr + 416, 64, 1, &bi);
+    p->intervals &= vk_usnap_find(p->addr + 256, 64, 256, &bi);
+    vk_usnap_drop(p->addr + 128, 288);  // joins both written intervals across their gap
+    p->intervals &= !vk_usnap_find(p->addr + 256, 64, 256, &bi);
+    uint64_t gen = vk_usnap_gen();
+    vk_usnap_drop(p->addr + 64, 32);    // an already invalidated subrange
+    p->intervals &= vk_usnap_gen() == gen;
+    vk_usnap_drop(p->addr + 512, 64);   // outside the snapshot, touching its end only
+    p->intervals &= vk_usnap_find(p->addr, 64, 256, &bi);
+    p->intervals &= vk_usnap_find(p->addr + 480, 32, 1, &bi);
     (void)ex;
 }
 
 static int snapshot_probe_record(VkCommandBuffer cb, uint64_t fence, uint64_t ticks, void *context) {
     return vk_exec_record_work(cb, fence, ticks, snapshot_probe_work, context);
+}
+
+static void snapshot_pending_work(VkExec *ex, void *context) {
+    SnapshotProbe *p = context;
+    VkDescriptorBufferInfo bi;
+    // Start another snapshot while this recording's write fence is still pending. The first binding must stay
+    // live, but its adjacent, unwritten binding must still be protected from later CPU changes.
+    vk_usnap_drop(p->addr + 64, 64);
+    vk_usnap_end(ex->fence);
+    vk_usnap_begin(ex, NULL, 0, ex->fence);
+    p->pending = !vk_usnap_find(p->addr, 256, 256, &bi) &&
+                  vk_usnap_find(p->addr + 256, 256, 256, &bi);
+}
+
+static int snapshot_pending_record(VkCommandBuffer cb, uint64_t fence, uint64_t ticks, void *context) {
+    return vk_exec_record_work(cb, fence, ticks, snapshot_pending_work, context);
 }
 
 int probe_vkusnap(void) {
@@ -869,11 +900,13 @@ int probe_vkusnap(void) {
                    .game_mem = (uint8_t *)(uintptr_t)heap, .size = 0x100000};
     CHECK(b->pool_init(&pool), "snapshot probe pool");
     SnapshotProbe p = {.addr = heap + 0x1000};
-    memset((void *)(uintptr_t)p.addr, 0x31, 64);
+    memset((void *)(uintptr_t)p.addr, 0x31, 512);
     _Alignas(8) uint8_t stream[256];
     uint8_t *end = put(stream, OP_BEGIN, NULL, 0);
-    p_bind_buf bind = {0, 0, p.addr, 64};
+    p_bind_buf bind = {0, 0, p.addr, 256};
     end = put(end, OP_BIND_UBO, &bind, sizeof bind);
+    p_bind_buf adjacent = {0, 1, p.addr + 256, 256};
+    end = put(end, OP_BIND_UBO, &adjacent, sizeof adjacent);
     put(end, OP_END, NULL, 0);
     uint64_t handle = (uint64_t)(uintptr_t)stream;
     uint64_t fence = b->submit(&handle, 1, rt_ticks());
@@ -884,10 +917,20 @@ int probe_vkusnap(void) {
         CHECK(b->fence_wait(fence, 5000000000ull), "inherited snapshot fence");
         CHECK(p.inherited && p.dropped, "inherited uniform snapshot pass %d: copied %d, GPU write invalidated %d",
               i, p.inherited, p.dropped);
+        CHECK(p.adjacent, "GPU write to one uniform discarded the adjacent uniform snapshot (pass %d)", i);
+        CHECK(p.intervals, "partial uniform invalidation lost untouched bytes or retained GPU-written bytes (pass %d)", i);
     }
+    fence = vk_sync_submit_record(snapshot_pending_record, &p, rt_ticks());
+    CHECK(b->fence_wait(fence, 5000000000ull), "pending write snapshot fence");
+    CHECK(p.pending, "pending GPU write to one binding discarded an untouched adjacent binding");
+    fence = vk_sync_submit_record(snapshot_probe_record, &p, rt_ticks());
+    CHECK(b->fence_wait(fence, 5000000000ull), "completed write snapshot fence");
+    CHECK(p.inherited && p.adjacent && p.intervals, "completed write still excludes a uniform snapshot");
     end = put(stream, OP_BEGIN, NULL, 0);
     bind.addr = bind.size = 0;
     end = put(end, OP_BIND_UBO, &bind, sizeof bind);
+    adjacent.addr = adjacent.size = 0;
+    end = put(end, OP_BIND_UBO, &adjacent, sizeof adjacent);
     put(end, OP_END, NULL, 0);
     fence = b->submit(&handle, 1, rt_ticks());
     CHECK(b->fence_wait(fence, 5000000000ull), "snapshot unbind fence");
@@ -898,7 +941,7 @@ int probe_vkusnap(void) {
     vk_exec_xfer_shutdown();
     vk_backend_shutdown();
     CHECK(!vk_validation_errors_total(), "snapshot probe validation errors");
-    printf("probe-vkusnap: passed (inherited binding snapshotted twice without rebinding; GPU writes invalidate the copy)\n");
+    printf("probe-vkusnap: passed (inherited bindings; partial and pending GPU writes, adjacent uniforms, gaps and overlapping write intervals)\n");
     return 0;
 }
 

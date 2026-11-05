@@ -93,6 +93,7 @@ struct GfxShader {
     uint8_t iid[32];                                       // input id (see the keys at the top)
     uint32_t *spirv;
     int spv_checked;                                       // OOT_SPV_OVERRIDE looked for this shader's file
+    uint64_t spv_original;                                 // the hash of the SPIR-V OOT_SPV_OVERRIDE replaced, or 0
     uint64_t words;
     char *reflection;                                      // the service's .res.json text, parsed into the fields below
     uint64_t reflection_size;
@@ -2363,13 +2364,15 @@ static void spv_override(GfxShader *s) {
         fseek(f, 0, SEEK_SET);
         uint32_t *o = n >= 20 && !(n & 3) ? malloc((size_t)n) : NULL;
         if (o && fread(o, 1, (size_t)n, f) == (size_t)n) {
-            s->spirv = o, s->words = (uint64_t)n / 4;
+            s->spirv = o, s->words = (uint64_t)n / 4, s->spv_original = h;
             rt_log("gfx_shader: OOT_SPV_OVERRIDE replaced %016llx", (unsigned long long)h);
         }
         fclose(f);
     }
     s->spv_checked = 1;
 }
+
+uint64_t gfx_shader_spv_original(const GfxShader *s) { return s->spv_original; }
 
 const uint32_t *gfx_shader_spirv(const GfxShader *s, uint64_t *words) {
     static volatile long lock;

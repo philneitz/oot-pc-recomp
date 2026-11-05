@@ -6,8 +6,7 @@ walked bind operations in the new command streams, so those inherited bindings c
 CPU writes made before the GPU consumed that memory could therefore affect an earlier submitted draw.
 
 `vk_usnap_begin` now collects the existing replay bindings as well as the bindings found in the new streams.
-Range merging, the 64 KiB bound, imported-pool checks, GPU-write exclusions, invalidation on a GPU write and
-fence-based arena reuse retain their existing behavior.
+The 64 KiB bound, imported-pool checks and fence-based arena reuse retain their existing behavior.
 
 ## Regression
 
@@ -37,3 +36,39 @@ After the inherited-binding fix, another sync-off run with physical input and mo
 of the same save and exited normally at 120 game-clock seconds (about 126 wall-clock seconds). Evidence is under
 `build/test/camera-study-inherited-sync0`. Live camera bindings remain in the log, so this is not sufficient to
 remove the launcher's GPU-sync workaround or to close the camera investigation.
+
+## Adjacent uniforms and GPU writes
+
+Snapshot allocations merge adjacent uniform ranges. Two further exclusions used that allocation boundary instead
+of the individual data affected by a GPU write:
+
+- A write during replay discarded the entire merged snapshot. `vk_usnap_drop` now keeps sorted, disjoint write
+  intervals separately; `vk_usnap_find` rejects only lookups intersecting those intervals. Untouched prefixes,
+  suffixes and neighboring uniforms keep their snapshots. Repeated contained writes do not change the generation.
+- At the next snapshot, a still-pending write excluded an entire merged allocation. The collector now excludes
+  affected bindings before merging the remaining safe ranges. A binding overlapping pending GPU writes stays live.
+
+`--probe-vkusnap` now covers adjacent bindings, partial writes, reverse-order insertion, adjacent and overlapping
+intervals, preserved gaps, and a write touching only the end of a snapshot. A second recording callback starts a
+fresh snapshot before its write fence can complete, checking that the affected binding stays live while its untouched
+neighbor is copied. The callbacks exercise the production snapshot functions on the real Vulkan submission path;
+the write notifications are synthetic, rather than shader writes.
+
+Before each correction its corresponding check fails; both pass after the changes. Private logs are
+`build/test/usnap-adjacent-before.log`, `usnap-intervals-after.log`, `usnap-pending-before.log` and
+`usnap-pending-after.log`. These tests establish snapshot coverage and invalidation, not a complete visual camera fix.
+
+## Screenshot interpretation
+
+The original automated images under `graphics-adjacent-before`, `graphics-adjacent-after` and
+`graphics-viewport-capture` included the full presentation allocation. The last draw uses a 1706x960 viewport and
+scissor in a 2560x1440 texture, and the window supplies a matching 1706x960 presentation crop. The unused right and
+bottom margins in those images are therefore not evidence of an output-scaling failure. `boot.c` now applies the
+window crop to both `TOTK_SHOTS` and `--shot`. The resulting images show the active game image before host scaling
+and colour adjustment. A copied-save run under `build/test/graphics-cropped-shots` exits normally and confirms that
+the corrected screenshots fill their image; the excessive haze remains visible.
+
+After both adjacent-range corrections, `build/test/graphics-pending-fixed` also exits normally with GPU sync off
+after 110 world-clock seconds (about 121 wall-clock seconds). The log reports zero Vulkan validation errors. Its
+camera log still contains live vertex-uniform bindings, and its corrected screenshots still show excessive haze.
+The test does not justify removing `OOT_GPU_SYNC=1` from the normal launcher.

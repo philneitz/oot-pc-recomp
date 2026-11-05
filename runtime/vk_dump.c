@@ -43,7 +43,7 @@
 #define MAX_PASSES 400
 #define PNG_CAP (2ull << 30)
 #define INFLIGHT_CAP (3ull << 30)   // host buffers waiting for their submission
-#define MAX_ENTS 48                 // distinct pipeline + texture sets listed per pass
+#define MAX_ENTS 512                // distinct pipeline + texture sets listed per pass
 #define MAX_LUTS 256                // 3D textures and small sampled 8-bit 2D textures dumped per frame
 #define TEX2D_CAP (1u << 20)        // texels of a sampled 2D texture that is dumped
 
@@ -53,7 +53,8 @@ static const char *trigger_path;
 static int waiting_trigger;
 static char dir[400];
 static FILE *passes_f, *images_f;
-static int seq, finished, copied;      // copied: passes and dispatches of the dump frame whose images were copied
+static int saw_capture, capture_retries;   // OOT_DUMP_UNTIL_CAPTURE
+static int seq, finished, copied;     // copied: passes and dispatches of the dump frame whose images were copied
 static int skip_runs, dump_ubo;        // TOTK_DUMP_SKIP_RUNS, TOTK_DUMP_UBO
 static uint32_t want_tex[16][2];       // TOTK_DUMP_TEX: slot id and 0, or width and height
 static int nwant_tex;
@@ -513,6 +514,7 @@ static uint64_t shader_hash(const GfxShader *s) {
     const uint32_t *w = gfx_shader_spirv(s, &words);
     const uint8_t *b = (const uint8_t *)w;
     for (uint64_t i = 0; i < words * 4; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+    if (gfx_shader_spv_original(s)) h = gfx_shader_spv_original(s);   // dumps list a replaced shader by its original hash
     char path[600];
     snprintf(path, sizeof path, "%s/sh_%016llx.spv", dir, (unsigned long long)h);
     FILE *f = fopen(path, "wb");
@@ -764,6 +766,12 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
        (unsigned long long)shader_hash(s->fs), (unsigned long long)(ex->prog ? ex->prog->serial : 0), s->prim);
     sp(&b, " depth test %d write %d func %d alpha %d ref %.3f blend %#x", (int)s->ds.dt, (int)s->ds.dw, (int)s->ds.df, (int)s->color.alpha_func, s->alpha_ref, (unsigned)s->color.blend_en);
     sp(&b, " wmask0 %#x", (unsigned)vk_pipeline_target_wmask(s, 0));
+    const float *vp = ex->vp[0];
+    VkRect2D sc = vk_exec_scissor(ex);
+    sp(&b, " viewport %.3f,%.3f %.3fx%.3f scissor %d,%d %ux%u",
+       ex->has_vp ? vp[0] : 0.0f, ex->has_vp ? vp[1] : 0.0f,
+       ex->has_vp ? vp[2] : (float)ex->pass_w, ex->has_vp ? vp[3] : (float)ex->pass_h,
+       sc.offset.x, sc.offset.y, sc.extent.width, sc.extent.height);
     for (uint32_t k = 0; ex->prog && k < ex->prog->nstage && k < 6; k++) {   // NVN 2 stages: their DKB_SHADER_DUMP names
         uint64_t o = nvn2_origin((const uint8_t *)(uintptr_t)ex->prog->sd[k].data);
         if (o) sp(&b, " nvn2 %016llx", (unsigned long long)o);
@@ -828,6 +836,7 @@ void vk_dump_pass_end(VkExec *ex) {
     uint64_t sig = targets_sig(ex);
     pass_decide(skip_runs && sig == last_targets);
     last_targets = sig;
+    if (ex->pass_w == 128 && ex->pass_h == 128 && pass_draws >= 20) saw_capture = 1;
     fprintf(passes_f, "pass %04d: render pass, draws %d, area %ux%u layers %u, fence %llu, frame %llu\n", n, pass_draws,
             ex->pass_w, ex->pass_h, ex->pass_layers, (unsigned long long)ex->fence, (unsigned long long)frame_now());
     for (int i = 0; i < 8; i++) {
@@ -1026,6 +1035,28 @@ void vk_dump_present(uint64_t frame) {
     plat_mutex_unlock(&img_lock);
     fclose(passes_f);
     passes_f = NULL;
+    // OOT_DUMP_UNTIL_CAPTURE=1: the ambient capture pass does not run every frame; a frame without it is written over.
+    if (getenv("OOT_DUMP_UNTIL_CAPTURE") && !saw_capture && capture_retries < 30) {
+        char path[600];
+        capture_retries++;
+        snprintf(path, sizeof path, "%s/passes.txt", dir);
+        passes_f = fopen(path, "w");
+        snprintf(path, sizeof path, "%s/images.txt", dir);
+        images_f = fopen(path, "w");
+        if (bd_size) {
+            snprintf(path, sizeof path, "%s/bufs.txt", dir);
+            bufs_f = fopen(path, "w");
+        }
+        if (passes_f && images_f) {
+            plat_mutex_lock(&rec_lock);
+            seq = copied = finished = 0;
+            png_bytes = 0;
+            dump_frame = frame + 1;
+            plat_mutex_unlock(&rec_lock);
+            rt_log("vk_dump: frame %llu has no capture pass, trying the next one", (unsigned long long)frame);
+            return;
+        }
+    }
     rt_log("vk_dump: frame %llu: %d passes and dispatches, about %llu MB of PNGs in %s", (unsigned long long)frame, seq,
            (unsigned long long)(png_bytes >> 20), dir);
 }

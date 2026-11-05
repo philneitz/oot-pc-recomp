@@ -40,7 +40,7 @@ typedef struct Arena {
 } Arena;
 
 typedef struct { uint64_t lo, hi; } Rng;
-typedef struct { uint64_t lo, hi, off; int dropped; } Reg;
+typedef struct { uint64_t lo, hi, off; } Reg;
 typedef struct { uint64_t lo, hi, fence; } Wrote;
 
 static struct {
@@ -52,6 +52,8 @@ static struct {
     int ncol, ccol;
     Reg *reg;                   // merged, sorted by lo, disjoint
     int nreg, creg;
+    Rng *drop;                  // byte ranges written during this submission, sorted, disjoint
+    int ndrop, cdrop;
     Wrote *wr;                  // GPU writes of submissions not known to be complete
     int nwr, cwr;
     // since the last summary
@@ -220,7 +222,7 @@ static void summary(void) {
 
 void vk_usnap_begin(const VkExec *ex, const uint64_t *handles, int n, uint64_t fence) {
     if (!U.mode) U.mode = rt_knob("UBO_SNAPSHOT", "1") + 1;   // stored +1: 0 is "not read yet"
-    U.on = 0, U.fence = fence, U.gen++;
+    U.on = 0, U.fence = fence, U.gen++, U.ndrop = 0;
     summary();
     if (!RT_KNOB_ON(U.mode - 1)) {
         U.off_subs++;
@@ -236,7 +238,15 @@ void vk_usnap_begin(const VkExec *ex, const uint64_t *handles, int n, uint64_t f
         if (handles[i]) collect(nvn_op_first(handles[i]), 0);
     sort_col();
     wr_prune();
-    // merge, keeping only what lies wholly in one imported pool and no GPU write in flight touches
+    // Reject pending GPU writes per binding before merging allocations. Otherwise a write to one uniform would
+    // also exclude every untouched neighbor that happens to be contiguous with it.
+    int kept = 0;
+    for (int i = 0; i < U.ncol; i++) {
+        if (wr_hits(U.col[i].lo, U.col[i].hi)) U.inflight++;
+        else U.col[kept++] = U.col[i];
+    }
+    U.ncol = kept;
+    // Merge the safe ranges, keeping only what lies wholly in one imported pool.
     U.nreg = 0;
     uint64_t total = 0;
     for (int i = 0; i < U.ncol;) {
@@ -249,12 +259,8 @@ void vk_usnap_begin(const VkExec *ex, const uint64_t *handles, int n, uint64_t f
             U.refused++;
             continue;
         }
-        if (wr_hits(lo, hi)) {
-            U.inflight++;
-            continue;
-        }
         if (U.nreg == U.creg) U.reg = grow(U.reg, &U.creg, sizeof *U.reg);
-        U.reg[U.nreg++] = (Reg){lo, hi, total, 0};
+        U.reg[U.nreg++] = (Reg){lo, hi, total};
         total += (hi - lo + ALIGN - 1) & ~(uint64_t)(ALIGN - 1);
     }
     if (!U.nreg) return;
@@ -287,7 +293,14 @@ int vk_usnap_find(uint64_t addr, uint64_t n, uint64_t align, VkDescriptorBufferI
     int i = first_above(addr);
     if (i >= U.nreg) return 0;
     const Reg *r = &U.reg[i];
-    if (r->dropped || addr < r->lo || addr + n > r->hi) return 0;
+    if (addr < r->lo || addr + n > r->hi) return 0;
+    int lo = 0, hi = U.ndrop;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (U.drop[mid].hi <= addr) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < U.ndrop && U.drop[lo].lo < addr + n) return 0;
     uint64_t off = r->off + (addr - r->lo);
     if (off % align) return 0;
     *out = (VkDescriptorBufferInfo){U.arena->buf, off, n};
@@ -300,8 +313,25 @@ void vk_usnap_drop(uint64_t addr, uint64_t n) {
     if (U.nwr == U.cwr) U.wr = grow(U.wr, &U.cwr, sizeof *U.wr);
     U.wr[U.nwr++] = (Wrote){addr, addr + n, U.fence};
     if (!U.on) return;
-    for (int i = first_above(addr); i < U.nreg && U.reg[i].lo < addr + n; i++)
-        if (!U.reg[i].dropped) U.reg[i].dropped = 1, U.drops++, U.gen++;
+    int region = first_above(addr);
+    if (region >= U.nreg || U.reg[region].lo >= addr + n) return;
+    // Allocation ranges merge adjacent uniforms. Invalidating that entire allocation would also make an untouched
+    // neighbor read live CPU memory, so retain the exact write intervals independently of the allocation layout.
+    uint64_t lo = addr, hi = addr + n;
+    int first = 0;
+    while (first < U.ndrop && U.drop[first].hi < lo) first++;
+    if (first < U.ndrop && U.drop[first].lo <= lo && U.drop[first].hi >= hi) return;
+    int last = first;
+    while (last < U.ndrop && U.drop[last].lo <= hi) {
+        if (U.drop[last].lo < lo) lo = U.drop[last].lo;
+        if (U.drop[last].hi > hi) hi = U.drop[last].hi;
+        last++;
+    }
+    if (first == last && U.ndrop == U.cdrop) U.drop = grow(U.drop, &U.cdrop, sizeof *U.drop);
+    memmove(U.drop + first + 1, U.drop + last, (size_t)(U.ndrop - last) * sizeof *U.drop);
+    U.ndrop += 1 - (last - first);
+    U.drop[first] = (Rng){lo, hi};
+    U.drops++, U.gen++;
 }
 
 uint64_t vk_usnap_gen(void) { return U.gen; }

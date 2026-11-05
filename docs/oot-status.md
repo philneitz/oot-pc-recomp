@@ -2,6 +2,24 @@
 
 Newest first. Update 1.1.1, build `oot111`.
 
+## 5 November 2026 (late evening): adjacent uniform snapshots and screenshot crop
+
+- **Fixed two demonstrated snapshot exclusions.** GPU writes during replay now invalidate exact byte intervals,
+  preserving untouched data in a merged allocation. Pending writes are excluded per binding before allocation
+  merging, preserving adjacent bindings. Both new real-Vulkan regressions fail before their respective corrections
+  and pass afterward. Selftest and the kernel probe pass. A copied-save gameplay run with GPU sync off exits normally
+  after 110 world-clock seconds, with no reported Vulkan validation errors. Live camera bindings remain;
+  `OOT_GPU_SYNC=1` stays in the normal launcher. See [snapshot investigation](oot-camera-snapshots.md).
+- **Fixed misleading automated screenshots.** The final render uses a 1706x960 viewport/scissor inside a 2560x1440
+  allocation, with a matching window crop. `TOTK_SHOTS` and `--shot` previously read the whole allocation, including
+  its unused right and bottom margins. They now read the active crop. The black margins in those captures do not
+  establish an output-scaling failure. Render dumps now include the first draw's viewport/scissor in each pipeline
+  entry; `OOT_PRESENT_LOG=1` logs presentation dimensions/crop changes.
+- **Haze and missing mesh geometry remain open.** The corrected screenshots still show the strong haze. The user's
+  reference is Lichii `test/all-in-one-mt` at `9b1a32dbb160d2d55ad1409961e87ec4a1256711`, inspected alongside the earlier
+  `nx2` reference. Its optional `EDEN_NX2_OOT_VISUAL_WORKAROUND=1` scales fog integration and exposure; upstream labels
+  it a temporary workaround, disabled by default, with the haze's root cause still open. It has not been imported.
+
 ## 5 November 2026 (evening): startup fiber ownership
 
 - **Fixed a reproducible cross-thread fiber failure.** Native fiber continuations retained their original thread
@@ -124,8 +142,8 @@ Newest first. Update 1.1.1, build `oot111`.
 
 1. The world's 3D scene: see docs/oot-rendering-investigation.md (storage/sampled view formats, lowering fixes,
    overexposed HDR scene still open).
-2. The composite fills only the top-left 1706x960 of 2560x1440: the dropped neural upscaler did that scaling. The
-   stand-in blit (vk_exec_draw.c `upscale_standin`) only finds compute-written sources; in gameplay the source is a
-   render-pass output. `OOT_TENSOR_LOG=1` lists what each dropped stage binds.
+2. Camera/GPU synchronization: remaining live uniform bindings and the need for `OOT_GPU_SYNC=1` require further
+   investigation. The apparent top-left-only gameplay output in automated screenshots was the missing presentation
+   crop in the screenshot function, corrected above; it is not evidence that the neural upscaler must stretch it.
 3. 62 tessellation shaders fail lowering ("native tessellation stage buffer read mode", ISBERD 0x923).
 4. Frame rate.

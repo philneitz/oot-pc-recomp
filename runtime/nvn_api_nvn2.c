@@ -131,7 +131,8 @@ static void mesh_note(const char *name, const Cpu *c) {
         int native = ctl && gfx_shader_is_nvn2(ctl);
         if (ctl && !native) memcpy(&legacy, ctl + 0x714, 4);
         o += snprintf(st + o, sizeof st - o, " [%u: %s sph %u stage %u hash %016llx]", i, native ? "unlowered" : "lowered",
-                      (w0 >> 10) & 15, legacy, (unsigned long long)(native ? gfx_shader_nvn2_hash(ctl, code) : 0));
+                      (w0 >> 10) & 15, legacy,
+                      (unsigned long long)(native ? gfx_shader_nvn2_hash(ctl, code) : code ? nvn2_origin(code) : 0));
     }
     rt_log("mesh: %s program %llu (%u stages)%s args %#llx %#llx %#llx %#llx", name, (unsigned long long)key,
            p ? p->nstage : 0, st, (unsigned long long)arg_x(c, 1), (unsigned long long)arg_x(c, 2),

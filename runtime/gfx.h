@@ -90,6 +90,7 @@ size_t gfx_shader_warm_list(GfxWarmEnt **out);              // malloc'd; recorde
 const GfxShader *gfx_shader_load_private(const uint8_t iid[32], int *owned);
 void gfx_shader_release_private(const GfxShader *s);
 const uint32_t *gfx_shader_spirv(const GfxShader *s, uint64_t *words);
+uint64_t gfx_shader_spv_original(const GfxShader *s);   // OOT_SPV_OVERRIDE: the replaced SPIR-V's hash, or 0
 uint64_t gfx_shader_failures(void);                         // failed translations; feeds GfxStats.shader_failures
 // Reflection: parsed once per shader from the translator's .res.json and the SPIR-V before it enters the cache.
 enum { GFX_RES_UBO, GFX_RES_SSBO, GFX_RES_TEX, GFX_RES_IMG, GFX_RES_KINDS };
@@ -160,5 +161,5 @@ uint64_t nvn_proc_address(const char *name);               // synthetic host add
 typedef struct { uint64_t frames, nvn_calls, nvn_distinct, unimplemented, validation_errors, shader_failures,
                  draws_skipped; } GfxStats;
 GfxStats gfx_stats(void);
-void rt_frame_presented(const tex_t *t, uint64_t n);       // boot.c: --frames N ends the run after the Nth present
+void rt_frame_presented(const tex_t *t, const int crop[4], uint64_t n);  // boot.c: screenshot/exit at a present
                                                            // (saves --shot first through read_texels)
