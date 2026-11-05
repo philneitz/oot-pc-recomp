@@ -216,6 +216,23 @@ class Emitter:
         self.reg_locals = reg_locals   # recomp/regs.py: registers per function in C locals
         self.kept = regs.CALLEE_SAVED if callee_saved else frozenset()   # not reloaded after a call
         self.uses_patches = False
+        self.setjmp_targets = set()
+        nso = getattr(mod, 'nso', None)
+        if nso:
+            got = {mod.base + off for off, _, sym, _ in nso.relocs if nso.syms[sym][0] in ('setjmp', '_setjmp')}
+            for idx in np.flatnonzero(mod.words == 0xD61F0220):  # BR X17 in an AArch64 PLT stub
+                if idx < 3:
+                    continue
+                pc = mod.lo + (int(idx) - 3) * 4
+                adrp, ldr = mod.word(pc), mod.word(pc + 4)
+                if adrp & 0x9F00001F != 0x90000010 or ldr & 0xFFC003FF != 0xF9400211:
+                    continue
+                imm = ((adrp >> 5 & 0x7FFFF) << 2) | (adrp >> 29 & 3)
+                if imm & (1 << 20):
+                    imm -= 1 << 21
+                slot = (pc & ~0xFFF) + (imm << 12) + ((ldr >> 10 & 0xFFF) * 8)
+                if slot in got:
+                    self.setjmp_targets.add(pc)
         self.stats = Counter()
         self.unsupported = Counter()
 
@@ -328,7 +345,12 @@ class Emitter:
         # An unresolved computed br re-enters the function through fb_<entry>, a C function of its own, which local
         # flags would not survive; such functions keep NZCV in c->nzcv.
         # The same holds for registers in locals (recomp/regs.py): fb_<entry> keeps them in the Cpu too.
-        local = not all_labels
+        has_setjmp = any(ins.kind == 'bl' and ins.target in self.setjmp_targets for ins in insns)
+        if has_setjmp and all_labels:
+            raise ValueError(f'{entry:#x}: setjmp with unresolved computed branches needs a shared continuation scope')
+        # Native longjmp invalidates modified automatic locals. Keep guest registers and
+        # flags in Cpu in these few functions, and restore Cpu at the landing point.
+        local = not all_labels and not has_setjmp
         spill, reload, reload_call = (regs.SPILL, regs.RELOAD, regs.RELOAD_CALL) if local else ('', '', '')
         succ = self.flow(insns, entry, end, tables) if local else None
         fp = self.flag_plan(insns, entry, end, tables, succ) if local else None
@@ -371,10 +393,18 @@ class Emitter:
         else:
             redispatch = f'{MUSTTAIL} rt_dispatch(c);'
             out = [f'void {fname(entry)}(Cpu *c) {{', f'    FN_ENTER({hx(entry)});']
-            if fp.used:
+            if fp and fp.used:
                 out.append('    ' + fp.decl())
+        if has_setjmp:
+            out.append('    RtGuestJumpScope jump_scope __attribute__((cleanup(rt_guest_jump_cleanup))) = {c};')
 
         def call(t, a):
+            if t in self.setjmp_targets:
+                refs.add(t)
+                return (f'c->x[30] = {hx(a + 4)}; '
+                        f'{{ RtGuestJump *j = rt_guest_jump_prepare(&jump_scope); '
+                        f'if (setjmp(j->host) == 0) {{ {fname(t)}(c); }} '
+                        f'else {{ rt_guest_jump_landed(c); }} }}')
             if t in starts:
                 refs.add(t)
                 return f'c->x[30] = {hx(a + 4)}; {spill}{fname(t)}(c);{reload_call}'
@@ -466,6 +496,8 @@ class Emitter:
         else:
             out += [line for _, line in body]
         out.append('}')
+        if has_setjmp:
+            out = [line.replace(MUSTTAIL, 'return') for line in out]
         self.stats['functions'] += 1
         self.stats['instructions'] += len(insns)
         return out, refs
@@ -483,7 +515,8 @@ def chunk_text(name, number, emitter, fns):
     protos = ''.join(f'void {fname(r)}(Cpu *c);\n' for r in sorted(refs))
     if emitter.uses_patches:
         protos += 'extern uint8_t rt_patch_on[];\n'
-    return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n\n' + protos + '\n'
+    jump_include = '#include "guest_jump.h"\n' if any('RtGuestJumpScope' in fn for fn in body) else ''
+    return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n' + jump_include + '\n' + protos + '\n'
             + '\n\n'.join(body) + '\n')
 
 

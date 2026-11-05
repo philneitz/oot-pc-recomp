@@ -2,6 +2,36 @@
 
 Newest first. Title 0400486024DEC000, update 1.1.1, build `oot111`.
 
+## 5 November 2026 (afternoon): the world renders on Linux
+
+- **State:** Zuriel-Zurichi's `fix/oot-rendering-3d` (c3ad87b: NVN view formats, RGB9E5, followed-texture formats,
+  integer sampled types, lowering fixes, guest setjmp/longjmp; docs/oot-rendering-investigation.md) merged over our
+  memory work (8 MiB unsized storage cap, windowed shadows), without its translator patches 0022/0023. On a
+  GTX 1070 the intro video plays, the save loads and the world shows at a good frame rate. The generator changed
+  (setjmp), so `recomp/gen.py` must be run again before `tools/build_game.py`; the translator must be rebuilt
+  (`tools/build_xlate.py`, 21 patches).
+- **Why the full merge froze on entering the world:** patches 0022/0023 made a compute shader (key `66c9e4a2…`)
+  enumerate all 22 uniform/storage records of its c0 bank as guarded candidates. The 495 KB of SPIR-V took the
+  NVIDIA compiler 122 s and then 95 s inside `vkCreateComputePipelines` on the replay thread, with 2.6 GB of heap
+  (jemalloc profile: `nvvm` / `nvGetCompilerInterface`), so the process passed 10 GB and the PC ran out of memory.
+  An RTX 5080 on Windows absorbs it. Without the patches that shader is skipped again; the enumeration can come back
+  with a bound on candidates or with compute pipeline builds off the replay thread.
+- **Still open: the world's light is blown out and flickers.** The scene is already white in the HDR target before
+  bloom and upscale (Zuriel's capture and ours). Leads: GPU-computed values whose compute passes are skipped
+  (exposure, 128x72x96 light volumes: 64-bit atomics the translator rejects), and mesh draws.
+- **Mesh draws are not replayed at all.** `DrawMeshTasks*` are accepted and dropped (nvn_api_nvn2.c); there is no
+  `VK_EXT_mesh_shader` path, and a GTX 1070 has none. `OOT_MESH_LOG=1` found ~30 programs (4034-4095) drawing through
+  `DrawMeshTasksIndirect` from the title on, with a mesh stage in the vertex slot, a fragment stage, and in some a
+  third (task) stage that does not lower; their indirect arguments live in the buffers the frame's first compute
+  passes write (GPU-driven culling). Replaying them needs `VK_EXT_mesh_shader` where present and task/mesh stages run
+  as compute (writing vertices and an indirect draw) elsewhere.
+- **The neural upscaler** (HMMA/LDSM compute stages) is still replaced by a linear blit; it ran only in the video
+  scenes in our captures (the world's upscale into the HUD layer is program 109, an ordinary per-tap gather shader).
+  On GPUs without tensor cores, FSR 1 (already in the runtime for the output) is the cheap stand-in; FSR 2/3 would
+  need the game's motion vectors.
+- Lichii b8c812b18 (#112) lowers Ocarina's 1080p upscaler gathers (LEA in the per-tap offset scan, F16 and guarded
+  offsets, depth-compare gathers); most of it already came with c3ad87b.
+
 ## 5 November 2026 (morning)
 
 - **2 fps in the world was a 1.4 GB write-back every submission.** Once gameplay starts the game creates a 2.4 GB

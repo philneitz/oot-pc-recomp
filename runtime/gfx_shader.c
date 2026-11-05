@@ -1511,8 +1511,13 @@ static size_t build_request(char *o0, const char *hex, const char *stage, const 
     if (a) {
         const char *sep = "";
         o += sprintf(o, ",\"tex\":{");
-        for (int i = 0; i < 32; i++)
-            if (a->tex_type[i] && a->tex_type[i] < COUNT(tex_names)) o += sprintf(o, "%s\"%d\":\"%s\"", sep, i, tex_names[a->tex_type[i]]), sep = ",";
+        for (int i = 0; i < 32; i++) {
+            unsigned type = a->tex_type[i] & 0x3f;
+            if (type && type < COUNT(tex_names)) {
+                const char *format = a->tex_type[i] & 0x40 ? "R32Uint" : a->tex_type[i] & 0x80 ? "R32Sint" : "R8G8B8A8Unorm";
+                o += sprintf(o, "%s\"%d\":{\"type\":\"%s\",\"fmt\":\"%s\"}", sep, i, tex_names[type], format), sep = ",";
+            }
+        }
         sep = "";
         o += sprintf(o, "},\"img\":{");
         for (int i = 0; i < 32; i++)
@@ -1681,7 +1686,11 @@ static int req_init(Req *r, int stage, const uint8_t *control, const uint8_t *co
     if (!control) return fail("missing control section", NULL), 0;
     // Reading an NVN 2 control block at the NVN 1 offsets (+0x700, +0x704) runs off its end and yields a bogus code
     // length, which once crashed the Vulkan path.
-    if (control && gfx_shader_is_nvn2(control)) return fail("NVN 2 program (Ampere code): no translator yet", NULL), 0;
+    if (gfx_shader_is_nvn2(control)) {
+        char native[17];
+        snprintf(native, sizeof native, "%016llx", (unsigned long long)gfx_shader_nvn2_hash(control, code));
+        return fail("native Ampere stage was not lowered; see the nvn2 rejection for this hash", native), 0;
+    }
     if (control && stage == GFX_STAGE_CS && !memcmp(control + NVN2_C0_LAYOUT, "DKC0", 4))
         return fail("old NVN 2 compute control: regenerate shader inputs with root layout version 2", NULL), 0;
     r->require_c0 = stage == GFX_STAGE_CS && !memcmp(control + NVN2_C0_LAYOUT, "DKC1", 4);

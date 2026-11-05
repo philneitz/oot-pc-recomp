@@ -178,13 +178,26 @@ static class SwshXlate
                 if (bytes >= img && bytes < img + 8 * (int)c[0] && (bytes - img) % 8 == 0) return (bytes - img) / 8;
                 return -1;
             }
-            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= TexBase && bytes < SampBase && (bytes - TexBase) % 8 == 0 ? (bytes - TexBase) / 8 : -1;
+            if (cbufSlot >= 0 && (cbufSlot & 0xffff) != 2) return -1;
+            if (bytes >= 0x120 && bytes < 0x168 && (bytes - 0x120) % 8 == 0) return (bytes - 0x120) / 8;
+            return bytes >= TexBase && bytes < SampBase && (bytes - TexBase) % 8 == 0 ? (bytes - TexBase) / 8 : -1;
+        }
+        string HandleTable(int handle)
+        {
+            (int off, _, _) = TextureHandle.UnpackOffsets(handle);
+            int bytes = off * 4;
+            if (_job["c0"] is JsonArray c && c.Count == 4)
+            {
+                int img = 0x10 + _rootBytes + 16 * ((int)c[1] + (int)c[2]) + 8 * (int)c[3];
+                return bytes >= img && bytes < img + 8 * (int)c[0] ? "img" : "tex";
+            }
+            return bytes >= 0x120 && bytes < 0x168 ? "img" : "tex";
         }
         public SamplerType QuerySamplerType(int handle, int cbufSlot = -1)
         {
             int slot = TexSlot(handle, cbufSlot);
             if (slot >= 0) TexQueried.Add(slot);
-            string t = slot >= 0 ? Get("tex", slot) ?? Get("img", slot) : null;
+            string t = slot >= 0 ? Get(HandleTable(handle), slot) : null;
             if (t == null) { Notes.Add($"贴图句柄 {handle:X}（常量段 {cbufSlot}，槽 {slot}）无 PC 类型，按 2D"); return SamplerType.Texture2D; }
             if (t.EndsWith("_depth")) t = t.Substring(0, t.Length - 6);   // depth-format texture: same sampler type here; the host binds a depth view
             return t switch
@@ -196,11 +209,14 @@ static class SwshXlate
                 _ => SamplerType.Texture2D,
             };
         }
+        // Vulkan image declarations must retain the bound view's numeric type.
+        // Formatless declarations default to float and cannot access Ocarina's uint views.
+        public bool QueryHostSupportsImageLoadFormatted() => false;
         public TextureFormat QueryTextureFormat(int handle, int cbufSlot = -1)
         {
             int slot = TexSlot(handle, cbufSlot);
             if (slot >= 0) ImgQueried.Add(slot);
-            string f = _job["img"] is JsonObject t && slot >= 0 && t[slot.ToString()] is JsonObject o ? (string)o["fmt"] : null;
+            string f = _job[HandleTable(handle)] is JsonObject t && slot >= 0 && t[slot.ToString()] is JsonObject o ? (string)o["fmt"] : null;
             if (f == null) { Notes.Add($"图像句柄 {handle:X} 槽 {slot} 无 PC 格式，按 R8G8B8A8Unorm"); return TextureFormat.R8G8B8A8Unorm; }
             return Enum.TryParse(f, true, out TextureFormat tf) ? tf : TextureFormat.R8G8B8A8Unorm;
         }

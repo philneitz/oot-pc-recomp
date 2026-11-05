@@ -89,7 +89,7 @@ def on_path(name):
 
 CLANG = UCRT / 'clang.exe' if WIN else on_path('clang')
 NINJA = UCRT / 'ninja.exe' if WIN else on_path('ninja')
-SDL3_DLLS = [UCRT / 'SDL3.dll', UCRT / 'libiconv-2.dll', UCRT / 'libopus-0.dll'] if WIN else []
+WINDOW_DLLS = [UCRT / 'SDL3.dll', UCRT / 'libiconv-2.dll', UCRT / 'libopus-0.dll', UCRT / 'libdav1d-7.dll'] if WIN else []
 
 # Flags for generated code as LAS Recomp builds it (Makefile GENFLAGS, Windows), plus -march for the FP/SIMD lowering.
 GEN_FLAGS = ['-O1', '-fno-strict-aliasing', '-Wno-return-type', '-Wno-unused-label', '-fvisibility=hidden',
@@ -101,7 +101,7 @@ if WIN:
     RT_FLAGS.append('-D_WIN32_WINNT=0x0A00')
     # -Xlinker passes the map path as one argument; -Wl, would split it at any comma in the build dir path
     LINK_FLAGS = ['-fuse-ld=lld', '-Wl,--stack,16777216', '-Xlinker', '"--Map=$builddir/totk.map"']   # the map feeds tools/prof_report.py
-    LINK_LIBS = ['-lpsapi', '-lbcrypt', '-lvulkan-1', '-luser32', '-lgdi32', '-ldwmapi', '-limm32', '-lwinmm', '-lSDL3', '-lopus', '-l:libvpx.a', '-l:libzstd.a', '-l:libstdc++.a', '-l:libwinpthread.a']   # Vulkan back end; libvpx static (movies); libzstd static (resolution.c)
+    LINK_LIBS = ['-lpsapi', '-lbcrypt', '-lvulkan-1', '-luser32', '-lgdi32', '-ldwmapi', '-limm32', '-lwinmm', '-lSDL3', '-lopus', '-l:libvpx.a', '-ldav1d', '-l:libzstd.a', '-l:libstdc++.a', '-l:libwinpthread.a']   # Vulkan back end; libvpx static (movies), dav1d (Ocarina AV1 cutscenes), zstd static (resolution.c)
     VMA_INCLUDE = UCRT.parent / 'include' / 'vma'   # vk_mem_alloc.h; MSYS2 package vulkan-memory-allocator
 else:
     # -no-pie: the lifted modules' function tables (hundreds of thousands of pointers) need no load-time relocation.
@@ -762,7 +762,7 @@ def main():
         NINJA = args.ninja.resolve()
     elif not NINJA.is_file() and (ROOT / 'bin' / ('ninja' + ('.exe' if WIN else ''))).is_file():
         NINJA = ROOT / 'bin' / ('ninja' + ('.exe' if WIN else ''))   # the release folder (tools/make_release.py)
-    dlls = SDL3_DLLS
+    dlls = WINDOW_DLLS
     suffix = '.exe' if WIN else ''
     if args.toolchain:
         TOOLCHAIN_BIN = (args.toolchain / 'bin').resolve()
@@ -874,7 +874,7 @@ def main():
     if args.make_runtime_lib:
         print(f'{below_root(exe)}: {mib(exe.stat().st_size)}')
         return
-    for dll in dlls:   # dynamic SDL3 (zlib) and its libiconv (LGPL, unmodified DLL), found next to totk.exe
+    for dll in dlls:   # dynamic SDL3, Opus and dav1d dependencies, found next to the executable
         shutil.copy2(dll, exe.parent / dll.name)
     sections, image = pe_sections(exe) if WIN else elf_sections(exe)
     print(f'{below_root(exe)}: file {mib(exe.stat().st_size)}, '

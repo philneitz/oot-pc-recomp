@@ -52,6 +52,8 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
         break;
     case 0x807:
     case 0x808:
+    case 0x809: // FMNMX immediate: the literal is not a register operand.
+    case 0x803: // P2R: preserve both the destination and its merge source.
     case 0x923:
     case 0x820:
     case 0xa20:
@@ -71,6 +73,13 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
     case 0x805:
         operand(16, 2);
         break;
+    case 0xb82: { // LDC: byte-address index plus one or two destination registers.
+        const u32 width = input.Bits(73, 3);
+        if (width > 5) { result.valid = false; return result; }
+        operand(16, width == 5 ? 2 : 1);
+        operand(24);
+        break;
+    }
     case 0xc17:
     case 0x817:
         operand(16);

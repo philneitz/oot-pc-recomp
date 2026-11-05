@@ -168,9 +168,11 @@ extern int vk_dump_armed;
 void vk_dump_init(void);                 // reads the environment; vk_exec_record's first call
 void vk_dump_pass_end(VkExec *ex);       // after vkCmdEndRendering
 void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeInfo *info);   // after a draw's binds
+void vk_dump_draw_skip(VkExec *ex, const char *reason);   // failed or pending draws, grouped per pass and program
 void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPipeInfo *info, const p_dispatch *d);
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload);   // before a copy or texture clear is replayed
 void vk_dump_present(uint64_t frame);    // vk_be_present: waits for the dump frame's copies and closes the logs
+void vk_dump_upscale(VkExec *ex, VkImage image, VkFormat format, uint32_t width, uint32_t height, const char *kind);
 
 // c0, the NVN driver constant bank of one stage (vk_exec_draw.c; TOTK_FIX_C0=0 binds zeros instead): bank is
 // VK_C0_BYTES, stage an NVN stage (0 vertex, 1 fragment, 5 compute), ssbo and ubo the 16 bound slots of that stage.

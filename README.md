@@ -1,5 +1,10 @@
 # DKB Recomp
 
+> This checkout's `oot-port` branch contains experimental Ocarina of Time 1.1.1 support. See
+> [Ocarina rendering investigation and implementation plan](docs/oot-rendering-investigation.md) for the current
+> build command, upstream branch audit, verified shader corrections and remaining 3D blockers. The Bananza status
+> and instructions below describe the inherited base project.
+
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Content guard](https://github.com/Lucas-blip-png/dkb-pc-recomp/actions/workflows/content-guard.yml/badge.svg?branch=bananza)](https://github.com/Lucas-blip-png/dkb-pc-recomp/actions/workflows/content-guard.yml)
 [![Stars](https://img.shields.io/github/stars/Lucas-blip-png/dkb-pc-recomp?style=flat)](https://github.com/Lucas-blip-png/dkb-pc-recomp/stargazers)

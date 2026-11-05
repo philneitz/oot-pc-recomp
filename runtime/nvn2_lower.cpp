@@ -74,8 +74,9 @@ Lowered *lower(const uint8_t *control, const uint8_t *code) {
     }
     const auto lowered = Shader::Ampere::LowerToMaxwell(native, options);
     if (!lowered) {
-        rt_log("nvn2: Ampere lowering failed at +%#x: %.*s", lowered.error_offset, (int)lowered.error.size(),
-               lowered.error.data());
+        rt_log("nvn2: Ampere lowering failed at +%#x: %.*s (native %016llx, SPH type %u)",
+               lowered.error_offset, (int)lowered.error.size(), lowered.error.data(),
+               (unsigned long long)gfx_shader_nvn2_hash(control, code), gfx ? (w0 >> 10) & 15 : 0);
         const size_t at = lowered.error_offset / 16;   // the instruction the lowering rejected, as 4 words
         if (at < native.size() && getenv("OOT_LOWER_DUMP")) {
             const auto &w = native[at].words;

@@ -3195,7 +3195,15 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l) {
                                       .layout = l->layout};
     pin_subgroup32(&ci.stage, &rqc, code, words);
     VkPipeline pipe = VK_NULL_HANDLE;
+    uint64_t t0 = qpc();
     if (vkCreateComputePipelines(P.device, P.cache, 1, &ci, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
+    double ms = ms_since(t0);
+    if (ms > 200) {   // the driver's compiler: a slow build here also held gigabytes of host memory (jeprof, nvvm)
+        const uint8_t *k = gfx_shader_key(cs);
+        rt_log("vk_pipeline: compute pipeline %02x%02x%02x%02x%02x%02x%02x%02x... (%llu KB of SPIR-V) took %.0f ms to build%s",
+               k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], (unsigned long long)(words * 4 / 1024), ms,
+               pipe ? "" : " and failed");
+    }
     vkDestroyShaderModule(P.device, m, NULL);
     return pipe;
 }

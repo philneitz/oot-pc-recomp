@@ -39,5 +39,6 @@ fetch SwitchRecomp   https://github.com/bgyss/SwitchRecomp.git       0f99e1c5c1e
 fetch deko3d           https://github.com/devkitPro/deko3d.git         373bfd43d8b2d805fa2eb7d406dbb823032df958
 fetch SavageWindRecomp https://github.com/Revivedx/SavageWindRecomp.git 575ad88e02f9a89a9a885d90039d48af33c982f4
 # Eglantine (GPL-3.0-or-later): the emulator that plays Bananza, the reference for NVN 2, the GPU and Switch 2 services.
-# The same commit as runtime/third_party/eglantine/UPSTREAM_COMMIT.
-fetch eglantine https://git.eden-emu.dev/Franseven/PokeDinner-a-Eglantine-Fork.git 1dd40d86df4bca1b68700091fe5ddb71a13162b2
+# Reference for the selected Ocarina fixes; baseline and local adaptations are recorded in
+# runtime/third_party/eglantine/UPSTREAM_COMMIT.
+fetch eglantine https://github.com/zortos293/Lichii.git 82b95a65d46527f0cfad3d5661439228897fee49

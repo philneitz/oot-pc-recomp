@@ -50,6 +50,8 @@ static const VkTexImage images[]={
     {.image=(VkImage)(uintptr_t)202,.view_type=VK_IMAGE_VIEW_TYPE_2D,.levels=1,.layers=1,.samples=1}
 };
 static const GfxShaderRes resource={.slot=0,.type=GFX_TEX_2D};
+// Numeric format resolution is outside this descriptor-pool switching seam.
+static uint8_t format_of_handle(const VkExec *ex,uint64_t h) { (void)ex; (void)h; return 0; }
 void rt_fatal(const char *fmt,...) { (void)fmt; abort(); }
 uint64_t vk_mem_gen(void) { return memory_generation; }
 uint64_t vk_usnap_gen(void) { return 1; }
@@ -144,7 +146,7 @@ static const RsList *rs_list(const VkExec *ex,const VkPipeInfo *info) {
 '''
     pieces = [function(draw, prefix) for prefix in (
         'static int nvn_stage_of(', 'static int gfx_type_of(', 'static uint64_t token_of(', 'static int slot_still(',
-        'static uint8_t type_of_handle(', 'static int in_fbl(', 'static SubRange sub_of(',
+        'static uint8_t type_of_handle(', 'static uint8_t sampled_type_of_handle(', 'static int in_fbl(', 'static SubRange sub_of(',
         'static uint32_t attached_as(', 'static void descriptor_state(VkExec *ex) {', 'static void answers_for(',
         'static SubRange sampled_sub(', 'static uint32_t feedback_scan(', 'static void tex_info_lookup(',
         'static void memo_key(', 'static int memo_match(', 'static int bind_sig(')]

@@ -2,6 +2,8 @@
 // the host can honour without knowing a new NVN 2 structure layout are here; the rest stop with their name
 // (nvn_procs.c) until a call shows what they need.
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "gfx.h"
@@ -9,6 +11,7 @@
 #include "nvn_api.h"
 #include "nvn_mode_trace.h"
 #include "nvn_obj.h"
+#include "platform/platform.h"
 
 // ---- Queues. The host has one queue model: a queue's primary queue and its ray-tracing memory change nothing.
 // void nvnQueueBuilderSetPrimaryQueue(NVNqueueBuilder *b, NVNqueue *primary)
@@ -97,14 +100,52 @@ NVN2_NOT_RECORDED(nvnCommandBufferBindShadingRateImage)
 NVN2_NOT_RECORDED(nvnCommandBufferSetShadingRatePaletteMode)
 NVN2_NOT_RECORDED(nvnCommandBufferShadingRateImagePalette)
 NVN2_NOT_RECORDED(nvnCommandBufferComputeDirtyTileMap)
-NVN2_NOT_RECORDED(nvnCommandBufferDrawMeshTasks)
-NVN2_NOT_RECORDED(nvnCommandBufferDrawMeshTasks3D)
-NVN2_NOT_RECORDED(nvnCommandBufferDrawMeshTasks3DIndirect)
-NVN2_NOT_RECORDED(nvnCommandBufferDrawMeshTasksIndirect)
-NVN2_NOT_RECORDED(nvnCommandBufferMultiDrawMeshTasks3DIndirect)
-NVN2_NOT_RECORDED(nvnCommandBufferMultiDrawMeshTasks3DIndirectCount)
-NVN2_NOT_RECORDED(nvnCommandBufferMultiDrawMeshTasksIndirect)
-NVN2_NOT_RECORDED(nvnCommandBufferMultiDrawMeshTasksIndirectCount)
+// ---- Mesh draws (not replayed yet). OOT_MESH_LOG=1 logs each distinct program a mesh draw uses (stages: SPH type,
+// native hash, lowered or not) and its arguments, and every 600 calls a running count per entry point, to size the
+// work of replaying them (VK_EXT_mesh_shader, or task/mesh stages run as compute on GPUs without it).
+_Thread_local const prog_t *nvn2_last_program;   // nvn_api_cmd.c nvnCommandBufferBindProgram, the recording thread's last
+static void mesh_note(const char *name, const Cpu *c) {
+    static int on = -1;
+    if (on < 0) on = getenv("OOT_MESH_LOG") != NULL;
+    static volatile int64_t calls;
+    int64_t n = __atomic_add_fetch(&calls, 1, __ATOMIC_RELAXED);
+    if (!on) return;
+    if (n % 600 == 0) rt_log("mesh: %lld mesh draw calls so far (last %s)", (long long)n, name);
+    const prog_t *p = nvn2_last_program;
+    static uint64_t seen[64];
+    static int nseen;
+    static PlatMutex lk = PLAT_MUTEX_INIT;
+    uint64_t key = p ? p->serial : 0;
+    plat_mutex_lock(&lk);
+    int known = 0;
+    for (int i = 0; i < nseen && !known; i++) known = seen[i] == key;
+    if (!known && nseen < 64) seen[nseen++] = key;
+    plat_mutex_unlock(&lk);
+    if (known) return;
+    char st[384] = "";
+    int o = 0;
+    for (uint32_t i = 0; p && i < p->nstage && i < 6 && o < (int)sizeof st - 64; i++) {
+        const uint8_t *ctl = p->sd[i].control, *code = (const uint8_t *)(uintptr_t)p->sd[i].data;
+        uint32_t w0 = 0, legacy = 0;
+        if (code) memcpy(&w0, code, 4);
+        int native = ctl && gfx_shader_is_nvn2(ctl);
+        if (ctl && !native) memcpy(&legacy, ctl + 0x714, 4);
+        o += snprintf(st + o, sizeof st - o, " [%u: %s sph %u stage %u hash %016llx]", i, native ? "unlowered" : "lowered",
+                      (w0 >> 10) & 15, legacy, (unsigned long long)(native ? gfx_shader_nvn2_hash(ctl, code) : 0));
+    }
+    rt_log("mesh: %s program %llu (%u stages)%s args %#llx %#llx %#llx %#llx", name, (unsigned long long)key,
+           p ? p->nstage : 0, st, (unsigned long long)arg_x(c, 1), (unsigned long long)arg_x(c, 2),
+           (unsigned long long)arg_x(c, 3), (unsigned long long)arg_x(c, 4));
+}
+#define NVN2_MESH_NOT_RECORDED(n) NVN_API(nvnCommandBuffer##n) { mesh_note(#n, c); }
+NVN2_MESH_NOT_RECORDED(DrawMeshTasks)
+NVN2_MESH_NOT_RECORDED(DrawMeshTasks3D)
+NVN2_MESH_NOT_RECORDED(DrawMeshTasks3DIndirect)
+NVN2_MESH_NOT_RECORDED(DrawMeshTasksIndirect)
+NVN2_MESH_NOT_RECORDED(MultiDrawMeshTasks3DIndirect)
+NVN2_MESH_NOT_RECORDED(MultiDrawMeshTasks3DIndirectCount)
+NVN2_MESH_NOT_RECORDED(MultiDrawMeshTasksIndirect)
+NVN2_MESH_NOT_RECORDED(MultiDrawMeshTasksIndirectCount)
 NVN2_NOT_RECORDED(nvnCommandBufferEnableExclusiveScissor)
 NVN2_NOT_RECORDED(nvnCommandBufferSetExclusiveScissor)
 NVN2_NOT_RECORDED(nvnCommandBufferSetExclusiveScissors)
