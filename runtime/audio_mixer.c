@@ -750,10 +750,12 @@ static void mix_circular_sink(AudioRenderer *r,int id) {
 }
 uint32_t audio_mixer_sink_written(AudioRenderer *r,int id) {Mixer *m=r->mixer;return m?m->sink_written[id]:0;}
 
+static uint64_t diag_frames;   // frames rendered, for the audio trace's 5 s windows
 void audio_mixer_render(AudioRenderer *r, double seconds) {
     (void)seconds;
     Mixer *m = r->mixer; if (!m) return;
     const int frames = m->frame, mc = r->param.submix_count + 1;
+    diag_frames += (uint64_t)frames;
     memset(m->buf, 0, (size_t)m->nbuf * (size_t)frames * sizeof(float));
     int at = 0;
     for (int i = 0; i < mc; i++) { m->offset[i] = at; if (r->mixes[i].in_use) at += r->mixes[i].buffer_count; }
@@ -784,12 +786,13 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
             }
         }
         if (rt_trace & RT_TRACE_AUDIO) {   // which sounding voices reach a mix, about every 5 s (up to 24 lines each)
-            static uint64_t last_at; static int shown;
-            if (r->elapsed_frames >= last_at + 240000) { last_at = r->elapsed_frames; shown = 0; }
+            static uint64_t last_at; static int shown; static uint8_t voice_seen[8192];
+            if (diag_frames >= last_at + 240000) { last_at = diag_frames; shown = 0; memset(voice_seen, 0, sizeof voice_seen); }
             float peak = 0;
             for (int c = 0; c < cc; c++) for (int k = 0; k < frames; k++) { float q = fabsf(vs[c][k]); if (q > peak) peak = q; }
-            if (peak > 0.005f && shown < 24) {
+            if (peak > 0.005f && shown < 24 && i < 8192 && !voice_seen[i]) {
                 shown++;
+                voice_seen[i] = 1;
                 double send = 0; int dests = 0;
                 if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
                     const SplitInfo *s = &m->split[v->in.splitter_id];
@@ -833,7 +836,7 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
         const AudrenMixIn *x = &r->mixes[order[a]]; int src = m->offset[order[a]];
         if (rt_trace & RT_TRACE_AUDIO) {   // each submix's level, about every 5 s
             static uint64_t mix_last_at; static int mix_shown;
-            if (a == 0 && r->elapsed_frames >= mix_last_at + 240000) { mix_last_at = r->elapsed_frames; mix_shown = 1; }
+            if (a == 0 && diag_frames >= mix_last_at + 240000) { mix_last_at = diag_frames; mix_shown = 1; }
             if (mix_shown) {
                 float peak = 0;
                 for (int c = 0; c < x->buffer_count && c < 24; c++) { const float *q = mixbuf(m, src + c); for (int k = 0; k < frames; k++) if (fabsf(q[k]) > peak) peak = fabsf(q[k]); }
