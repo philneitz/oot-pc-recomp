@@ -783,6 +783,33 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
                 }
             }
         }
+        if (rt_trace & RT_TRACE_AUDIO) {   // which sounding voices reach a mix, about every 5 s (up to 24 lines each)
+            static uint64_t last_at; static int shown;
+            if (r->elapsed_frames >= last_at + 240000) { last_at = r->elapsed_frames; shown = 0; }
+            float peak = 0;
+            for (int c = 0; c < cc; c++) for (int k = 0; k < frames; k++) { float q = fabsf(vs[c][k]); if (q > peak) peak = q; }
+            if (peak > 0.005f && shown < 24) {
+                shown++;
+                double send = 0; int dests = 0;
+                if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
+                    const SplitInfo *s = &m->split[v->in.splitter_id];
+                    for (int k = 0; k < s->ndest; k++) {
+                        SplitDest *d = &m->dest[s->ids[k]];
+                        if (!d->used || !mix_valid(r, d->dest)) continue;
+                        dests++;
+                        for (int b = 0; b < r->mixes[d->dest].buffer_count && b < 24; b++) send += fabsf(d->vol[b]);
+                    }
+                } else if (mix_valid(r, v->in.mix_id)) {
+                    for (int c = 0; c < cc; c++) {
+                        int32_t id = v->in.channel_ids[c]; if (id < 0 || id >= r->param.voice_count * 6) continue;
+                        dests++;
+                        for (int b = 0; b < r->mixes[v->in.mix_id].buffer_count && b < 24; b++) send += fabsf(r->channels[id].mix[b]);
+                    }
+                }
+                rt_log("audio: voice %d fmt %d ch %d rate %u vol %.3f mix %d splitter %u: peak %.3f, send %.3f over %d dests", i, (int)v->in.sample_format, cc,
+                       v->in.sample_rate, v->in.volume, v->in.mix_id, v->in.splitter_id, peak, send, dests);
+            }
+        }
         if (v->in.splitter_id != SPLITTER_UNUSED && v->in.splitter_id < (uint32_t)m->nsplit) {
             const SplitInfo *s = &m->split[v->in.splitter_id];
             for (int c = 0; c < cc; c++) for (int k = c; k < s->ndest; k += cc) {
@@ -804,6 +831,16 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
     for (int a = 0; a < n; a++) {
         mix_effects(r, order[a]);
         const AudrenMixIn *x = &r->mixes[order[a]]; int src = m->offset[order[a]];
+        if (rt_trace & RT_TRACE_AUDIO) {   // each submix's level, about every 5 s
+            static uint64_t mix_last_at; static int mix_shown;
+            if (a == 0 && r->elapsed_frames >= mix_last_at + 240000) { mix_last_at = r->elapsed_frames; mix_shown = 1; }
+            if (mix_shown) {
+                float peak = 0;
+                for (int c = 0; c < x->buffer_count && c < 24; c++) { const float *q = mixbuf(m, src + c); for (int k = 0; k < frames; k++) if (fabsf(q[k]) > peak) peak = fabsf(q[k]); }
+                if (peak > 0.0005f) rt_log("audio: mix %d buffers %d vol %.3f dest %d splitter %u: peak %.3f", order[a], (int)x->buffer_count, x->volume, x->dest_mix_id, x->dest_splitter_id, peak);
+                if (a == n - 1) mix_shown = 0;
+            }
+        }
         if (x->dest_splitter_id != SPLITTER_UNUSED && x->dest_splitter_id < (uint32_t)m->nsplit) {
             const SplitInfo *s = &m->split[x->dest_splitter_id];
             for (int c = 0; c < x->buffer_count && c < 24; c++) for (int k = c; k < s->ndest; k += x->buffer_count) {

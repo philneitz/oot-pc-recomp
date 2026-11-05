@@ -936,6 +936,18 @@ static const GfxShader *shader_for(VkExec *ex, int st, int *present, int *pendin
     if (s) slot_mask_learn(serial, st, s);
     if (!s) warn_once(W_SHADER, "a stage %d shader of program %llu failed to translate: draws with it are skipped", st,
                       (unsigned long long)serial);
+    if (!s) {   // each stage with no translation once, with the pass it is skipped in (OoT: the frame's composite draw is one)
+        static uint64_t told[256];
+        static int ntold;
+        uint64_t id = gfx_shader_nvn2_hash(ctl, code), key = (id ? id : serial) * 31 + (uint64_t)st;
+        int seen = 0;
+        for (int i = 0; i < ntold && !seen; i++) seen = told[i] == key;
+        if (!seen && ntold < 256) {
+            told[ntold++] = key;
+            rt_log("vk_exec: no translation for stage %d, nvn2 %016llx, program %llu: draws skipped, first in pass %ux%u",
+                   st, (unsigned long long)id, (unsigned long long)serial, ex->pass_w, ex->pass_h);
+        }
+    }
     else if (set) {   // in front, the least recently used way drops out
         memmove(&set[1], &set[0], (SHADER_WAYS - 1) * sizeof *set);
         set[0] = (ShaderEnt){.serial = serial, .stage = st, .used = 1, .a = a, .s = s};

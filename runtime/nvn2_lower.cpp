@@ -181,6 +181,7 @@ extern "C" int nvn2_lower(const uint8_t *control, const uint8_t *code, const uin
     }
     std::lock_guard<std::mutex> g(lock);
     auto [it, fresh] = cache.try_emplace(key, nullptr);
+    if (fresh) rt_log("nvn2: lowering stage %016llx", (unsigned long long)key);
     if (fresh && (it->second = lower(control, code))) {
         it->second->origin = key;
         origins.emplace(reinterpret_cast<const uint8_t *>(it->second->code.data()), key);
