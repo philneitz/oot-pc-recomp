@@ -1093,6 +1093,11 @@ static void close_directory(uint64_t h) {
 #define I64(i) ((int64_t)arg_x(c, i))
 // OOT_FS_REPEAT=1: the guest call stack of the 20th open of one path (a load that is retried forever)
 static void fs_repeat_note(Cpu *c, const char *path) {
+    if (path && (rt_trace & RT_TRACE_AUDIO) && (strstr(path, "Voice/") || strstr(path, "Sound/Resource/Stream/Dm_"))) {   // does the game ask for speech at all?
+        static int32_t voice_opens;
+        int n = __atomic_add_fetch(&voice_opens, 1, __ATOMIC_RELAXED);
+        if (n <= 120) rt_log("fs: voice open %d: %s", n, path);
+    }
     static int on = -1;
     if (on < 0) on = getenv("OOT_FS_REPEAT") != NULL;
     if (!on || !path) return;
