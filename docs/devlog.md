@@ -8,6 +8,20 @@ the [roadmap issue](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/10).
 - **The destructible ground renders on Linux.** On one Bananza 1.0.0 tutorial run with an NVIDIA GTX 1070, enabling
   the native NVN 2 passthrough geometry path fixed the black ground. The runtime and Linux launcher now enable this
   path by default. Terrain destruction, longer sessions and other GPUs still need testing ([#45](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/45)).
+- **The NaN on DK's face is fixed** (#72 by zswxp59, 60e7616, [#70](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/70)).
+  DK's skinning stage packs tangents as signed bytes with Ampere `F2I.S8`. The lowering turns that into a Maxwell
+  F2I with an 8-bit destination, which the translator read as unsigned, so every negative component was stored as 0
+  and some tangents became zero vectors. DK's vertex stage normalized them into NaN, and the bloom spread it into
+  the headlamp halo and the black blot. Translator patch 0017 converts with the right sign and saturates to the byte
+  range before converting. In the frame 7400 scene the NaN goes from every attempt to 0, without the FMZ experiments.
+  The missing opening wall in #45 has another cause.
+- **NVN's alpha test applies** (#68 by philneitz, 73aade7). Vulkan has no alpha test, so the pipeline gets a fragment
+  variant that discards when output 0's alpha fails the compare. The skill tree menu no longer shows black blocks.
+- **Mixed routes reach the output** (#66 by monsterlag, 9a31b48, [#63](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/63)).
+  Submixes fed through a splitter were mixed after their destination, so their sound was lost: the banana jingle,
+  the area title card, area music and more. They are now ordered as a graph. Two main menu sounds still play in the
+  right channel only.
+
 - **No more clip and cull validation errors** (5ffe6ad). The translator declares `CullDistance[1]` next to
   `ClipDistance[8]`, which together exceed the device's limit of 8, and the runtime drops the member when nothing
   uses it. The check read the instruction number of `OpExtInst` as an id, and `Fma` (50) matched the `gl_PerVertex`
