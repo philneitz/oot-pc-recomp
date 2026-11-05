@@ -43,6 +43,10 @@ static uint64_t g_nhost;
 void rt_fatal(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
+    // The format string first: a test run ended in a fail-fast (0xC0000409) right after "FATAL: ", with the message lost.
+    rt_log_raw("FATAL (format): ", 16);
+    rt_log_raw(fmt, strlen(fmt));
+    rt_log_raw("\n", 1);
     rt_log_raw("FATAL: ", 7);
     rt_vlogf(fmt, ap);
     rt_log_raw("\n", 1);
