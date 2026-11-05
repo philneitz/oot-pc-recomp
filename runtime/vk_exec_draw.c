@@ -482,6 +482,7 @@ static void dummies_init(void) {
 
 static void twins_release(VkCtx *c);
 static void upscale_release(void);
+static void mesh_release(VkCtx *c);
 
 // Releases the stand-ins and the depth twins. The device must be idle; the game path leaves them to process exit like
 // the pipelines.
@@ -491,6 +492,7 @@ void vk_exec_draw_shutdown(void) {
     if (!c) return;
     twins_release(c);
     upscale_release();
+    mesh_release(c);
     for (int i = 0; Z.ready && i < DV_COUNT; i++) {
         if (Z.img[i].sview != Z.img[i].view) vkDestroyImageView(c->device, Z.img[i].sview, NULL);
         vkDestroyImageView(c->device, Z.img[i].view, NULL);
@@ -2107,6 +2109,8 @@ static void write_set(const VkPipeInfo *info, uint32_t s, VkDescriptorSet set, c
 // graphics push equal to the last one at its set number, with no other layout or bind between, is not recorded.
 // The descriptors go into one packed array d, a VkDescSlot per descriptor in binding order, which a set's update
 // template reads directly (VkPipeInfo.tpl); write structs are filled only when a set has no template.
+static VkDescriptorBufferInfo mesh_resource_info(VkExec *ex, const VkPipeBinding *binding);
+
 static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
     static VkWriteDescriptorSet w[MAX_BINDINGS];
     static VkDescSlot d[MAX_DESC];
@@ -2114,7 +2118,9 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
     if (info->n_bindings > MAX_BINDINGS) rt_fatal("vk: %u descriptor bindings exceed the replay's %d", info->n_bindings, MAX_BINDINGS);
     bind_stats(info);
     int gfx = info->bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS;
-    int skip = gfx ? bind_skip_on() : 0, same = 0, was_valid = B.res_valid;
+    int mesh = info->n_bindings && info->bindings[0].stage == GFX_STAGE_MESH;
+    int skip = gfx && !mesh ? bind_skip_on() : 0, same = 0, was_valid = B.res_valid;
+    if (mesh) B.res_valid = 0;   // native pointer-table reads are not part of the ordinary bind signature
     if (skip) {
         same = bind_sig(ex, info);
         if (same && was_valid && skip == 1) {
@@ -2162,6 +2168,10 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
                 }
             }
             o->buffer = (VkDescriptorBufferInfo){B.sup_buf, B.sup_off, SUPPORT_BYTES};
+        } else if ((b->stage == GFX_STAGE_MESH || b->stage == GFX_STAGE_TASK) &&
+                   (b->kind == GFX_RES_UBO || b->kind == GFX_RES_SSBO)) {
+            if (cnt != 1) rt_fatal("vk: native mesh descriptor arrays are unsupported");
+            o->buffer = mesh_resource_info(ex, b);
         } else if (b->kind == GFX_RES_UBO) {
             for (uint32_t k = 0; k < cnt; k++) o[k].buffer = ubo_info(ex, st, r->slot + (int)k);
         } else if (b->kind == GFX_RES_SSBO) {
@@ -2825,6 +2835,8 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
                          (int)s.ds.dt, (int)s.ds.dw, (int)s.ds.df);
     return 1;
 }
+
+#include "vk_exec_mesh.h"
 
 // TOTK_TRACE=perf: the draw or dispatch just recorded, with the NVN 2 names of its stages, for the slow-part line
 // (vk_sync.c vk_sync_note). kind: 0 draw, 1 indirect draw, 2 dispatch, 3 indirect dispatch.
@@ -3549,6 +3561,8 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     case OP_UPDATE_UB: op_update_ub(ex, payload); break;
     case OP_GEOMETRY_MODE: ex->geometry_mode = (uint32_t)((const p_flag *)payload)->value; break;
     case OP_DRAW_MESH: case OP_DRAW_MESH_IND: {
+        if (op == OP_DRAW_MESH && mesh_draw(ex, payload)) break;
+        if (op == OP_DRAW_MESH_IND && mesh_draw_indirect(ex, payload)) break;
         static uint64_t seen[256], calls;
         static unsigned nseen;
         static int log = -1;
