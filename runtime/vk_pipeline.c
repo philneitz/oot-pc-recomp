@@ -3653,15 +3653,17 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
     vkCmdSetPrimitiveTopology(cb, vk_pipeline_topology(s->prim));
     vkCmdSetDepthTestEnable(cb, d->dt);
     vkCmdSetDepthWriteEnable(cb, d->dw);
-    // OOT_DEPTH_EQ=always|lequal|gequal: replaces an EQUAL depth test, to see whether colour draws over a depth pre-pass
-    // fail it (holes in the colour image where the depth image is complete).
-    static int eq_mode = -1;
+    // OOT_DEPTH_EQ=always|lequal|gequal replaces an EQUAL depth test. OOT_DEPTH_EQ=<units>: LEQUAL with that constant bias
+    // towards the camera, a tolerance for positions a colour stage computes slightly differently from the depth pre-pass's.
+    static int eq_mode = -1, eq_units;
     if (eq_mode < 0) {
         const char *e = getenv("OOT_DEPTH_EQ");
         eq_mode = !e ? 0 : !strcmp(e, "always") ? NVN_DEPTH_FUNC_ALWAYS : !strcmp(e, "lequal") ? NVN_DEPTH_FUNC_LEQUAL : !strcmp(e, "gequal") ? NVN_DEPTH_FUNC_GEQUAL : 0;
+        if (e && !eq_mode && atoi(e) > 0) eq_mode = NVN_DEPTH_FUNC_LEQUAL, eq_units = atoi(e);
         if (eq_mode) rt_log("vk_pipeline: OOT_DEPTH_EQ: an EQUAL depth test becomes %s", e);
     }
-    vkCmdSetDepthCompareOp(cb, compare_op(eq_mode && d->df == NVN_DEPTH_FUNC_EQUAL ? (unsigned)eq_mode : d->df));
+    int eq_tolerant = eq_mode && d->df == NVN_DEPTH_FUNC_EQUAL;
+    vkCmdSetDepthCompareOp(cb, compare_op(eq_tolerant ? (unsigned)eq_mode : d->df));
     vkCmdSetStencilTestEnable(cb, d->st);
     vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, stencil_op(d->fail_f), stencil_op(d->zpass_f), stencil_op(d->zfail_f),
                       compare_op(d->sf_f));
@@ -3669,7 +3671,12 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
                       compare_op(d->sf_b));
     // NVN_POLYGON_OFFSET_ENABLE_* bit of the polygon mode in use: point 1, line 2, fill 4
     unsigned mode = pl->mode <= NVN_POLYGON_MODE_FILL ? pl->mode : NVN_POLYGON_MODE_FILL;
-    vkCmdSetDepthBiasEnable(cb, (pl->offset_en >> mode & 1) != 0);
+    if (eq_tolerant && eq_units) {
+        vkCmdSetDepthBiasEnable(cb, VK_TRUE);
+        vkCmdSetDepthBias(cb, -(float)eq_units, 0.0f, 0.0f);
+    } else {
+        vkCmdSetDepthBiasEnable(cb, (pl->offset_en >> mode & 1) != 0);
+    }
     vkCmdSetRasterizerDiscardEnable(cb, s->raster_discard != 0);
     vkCmdSetPrimitiveRestartEnable(cb, s->prim_restart != 0);
     if (P.dyn_vi && s->vs) {
