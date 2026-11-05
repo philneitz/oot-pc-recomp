@@ -1136,6 +1136,7 @@ void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16],
     if (stage == NVN_STAGE_CS && c0_lay) {
         if (!nvn2_c0_pack(bank, VK_C0_BYTES, c0_lay, c0_push, ssbo, ubo))
             rt_fatal("vk: invalid NVN 2 compute parameter-block layout");
+        memcpy(bank + 4, dispatch, 12);   // driver head: the group counts, read at c0+4 and c0+8 for the grid size
         return;
     }
     memset(bank, 0, VK_C0_BYTES);
