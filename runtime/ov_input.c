@@ -8,6 +8,7 @@
 // the gamepad's gyro and accelerometer (TOTK_MOTION=0, live: reads at rest). State layouts follow libnx HID.
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -109,6 +110,45 @@ static uint64_t fake_buttons(void) {
     return m;
 }
 
+// TOTK_INPUT_CONTROL=<file>: live test input, independent of window focus. A new sequence number starts a bounded
+// press: "sequence hex_buttons hold_ms lx ly rx ry". Writers replace the complete file atomically; leaving it
+// unchanged never repeats a press. Expiry releases input even if the test controller stops running.
+static void controlled_input(NpadState *state) {
+    static PlatMutex control_lock = PLAT_MUTEX_INIT;
+    static int parsed;
+    static const char *path;
+    static uint64_t next_read, sequence, until, buttons;
+    static int32_t axes[4];
+    plat_mutex_lock(&control_lock);
+    if (!parsed) path = getenv("TOTK_INPUT_CONTROL"), parsed = 1;
+    if (path && *path) {
+        uint64_t now = kern_now_ns();
+        if (now >= next_read) {
+            next_read = now + 10000000; // cap file reads at 100 Hz even when the guest polls several pad styles
+            FILE *f = fopen(path, "r");
+            if (f) {
+                unsigned long long seq, mask;
+                unsigned ms;
+                int ax[4];
+                if (fscanf(f, "%llu %llx %u %d %d %d %d", &seq, &mask, &ms, &ax[0], &ax[1], &ax[2], &ax[3]) == 7 &&
+                    seq && seq != sequence && ms <= 10000 &&
+                    ax[0] >= -32767 && ax[0] <= 32767 && ax[1] >= -32767 && ax[1] <= 32767 &&
+                    ax[2] >= -32767 && ax[2] <= 32767 && ax[3] >= -32767 && ax[3] <= 32767) {
+                    sequence = seq, buttons = mask, until = now + (uint64_t)ms * 1000000;
+                    for (int i = 0; i < 4; i++) axes[i] = ax[i];
+                    rt_log("hid: control sequence %llu buttons %#llx hold %u ms", seq, mask, ms);
+                }
+                fclose(f);
+            }
+        }
+        if (now < until) {
+            state->buttons |= buttons;
+            state->lx = axes[0], state->ly = axes[1], state->rx = axes[2], state->ry = axes[3];
+        }
+    }
+    plat_mutex_unlock(&control_lock);
+}
+
 // int GetNpadStates(<State> *out, int count, const NpadIdType &id): the newest state only. want: the style of the
 // overload, 0 for the Joy-Con overloads (never connected).
 static void npad_states(Cpu *c, uint32_t want) {
@@ -125,6 +165,7 @@ static void npad_states(Cpu *c, uint32_t want) {
         s.attributes = ATTR_CONNECTED;
         input_poll(&s.buttons, &s.lx, &s.ly, &s.rx, &s.ry);
         s.buttons |= fake_buttons();
+        controlled_input(&s);
         static volatile int32_t first_args, first_button;
         if (!plat_xchg32(&first_args, 1)) rt_log("hid: GetNpadStates first asked: style %u, id %#x, count %d", want, id, max);
         if (s.buttons && !plat_xchg32(&first_button, 1))
