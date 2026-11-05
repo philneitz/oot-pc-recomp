@@ -246,7 +246,7 @@ static void oq_cb(void *arg) {
         // OOT_OCC_FORCE=<n>: every samples-passed report reads at least n, nothing looks occluded (a test for objects the
         // game culls from a count). The audio-independent statistic goes out every 3000 reports with TOTK_TRACE=perf or the switch on.
         static long long force = -1;
-        static uint64_t st_reports, st_zero, st_gpu, st_max;
+        static uint64_t st_reports, st_zero, st_gpu, st_max, st_held;
         if (force < 0) {
             const char *e = getenv("OOT_OCC_FORCE");
             force = e ? atoll(e) : 0;
@@ -258,9 +258,32 @@ static void oq_cb(void *arg) {
         if (!oq_count) st_zero++;
         if (oq_count > st_max) st_max = oq_count;
         if (force && out < (uint64_t)force) out = (uint64_t)force;
-        if (st_reports == 200 || st_reports % 6000 == 0) {
-            rt_log("vk: samples-passed reports %llu: %llu read 0, %llu to no CPU-visible memory, largest %llu", (unsigned long long)st_reports,
-                   (unsigned long long)st_zero, (unsigned long long)st_gpu, (unsigned long long)st_max);
+        // OOT_OCC_HOLD=<n>: a report slot reads 0 only after n zero reports in a row; before that it keeps reading 1, so a
+        // lone zero doesn't make the game drop an object for a frame, and objects that stay occluded are still culled.
+        static long long hold = -1;
+        if (hold < 0) {
+            const char *e = getenv("OOT_OCC_HOLD");
+            hold = e ? atoll(e) : 0;
+            if (hold) rt_log("vk: OOT_OCC_HOLD: a report slot reads 0 after %lld zeros in a row", hold);
+        }
+        if (hold && s->addr) {
+            enum { HOLD_SLOTS = 1 << 16 };
+            static struct { uint64_t addr; uint32_t zeros; } slots[HOLD_SLOTS];
+            uint64_t h = (s->addr >> 4) * 0x9E3779B97F4A7C15ull;
+            uint32_t at = (uint32_t)(h >> 48);
+            for (uint32_t probe = 0; probe < 64; probe++, at = (at + 1) & (HOLD_SLOTS - 1))
+                if (!slots[at].addr || slots[at].addr == s->addr) break;
+            slots[at].addr = s->addr;
+            if (oq_count) slots[at].zeros = 0;
+            else if (slots[at].zeros < (uint32_t)hold) {
+                slots[at].zeros++;
+                st_held++;
+                out = 1;
+            }
+        }
+        if (st_reports == 200 || st_reports % 600000 == 0) {
+            rt_log("vk: samples-passed reports %llu: %llu read 0, %llu held at 1, %llu to no CPU-visible memory, largest %llu", (unsigned long long)st_reports,
+                   (unsigned long long)st_zero, (unsigned long long)st_held, (unsigned long long)st_gpu, (unsigned long long)st_max);
         }
         if (s->addr) write_counter(s->addr, out);
     }
