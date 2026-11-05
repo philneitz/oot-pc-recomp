@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 460
+#extension GL_EXT_mesh_shader : require
+layout(local_size_x=1) in;
+layout(triangles, max_vertices=3, max_primitives=1) out;
+layout(location=0) out vec4 color[];
+#ifdef WITH_TASK
+struct Payload { vec4 color; };
+taskPayloadSharedEXT Payload payload;
+#endif
+void main() {
+    SetMeshOutputsEXT(3,1);
+    gl_MeshVerticesEXT[0].gl_Position=vec4(-0.8,-0.8,0.5,1);
+    gl_MeshVerticesEXT[1].gl_Position=vec4(0.8,-0.8,0.5,1);
+    gl_MeshVerticesEXT[2].gl_Position=vec4(0,0.8,0.5,1);
+    gl_PrimitiveTriangleIndicesEXT[0]=uvec3(0,1,2);
+    for(int i=0;i<3;i++) {
+#ifdef WITH_TASK
+        color[i]=payload.color;
+#else
+        color[i]=vec4(1,0,0,1);
+#endif
+    }
+}

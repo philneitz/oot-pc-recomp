@@ -1043,7 +1043,8 @@ static const GfxShader *shader_for(VkExec *ex, int st, int *present, int *pendin
 
 static int nvn_stage_of(int gfx_stage) {
     return gfx_stage == GFX_STAGE_VS ? NVN_STAGE_VS : gfx_stage == GFX_STAGE_FS ? NVN_STAGE_FS :
-           gfx_stage == GFX_STAGE_GS ? NVN_STAGE_GS : gfx_stage == GFX_STAGE_CS ? NVN_STAGE_CS : -1;
+           gfx_stage == GFX_STAGE_GS ? NVN_STAGE_GS : gfx_stage == GFX_STAGE_CS ? NVN_STAGE_CS :
+           gfx_stage == GFX_STAGE_TASK ? 6 : gfx_stage == GFX_STAGE_MESH ? 7 : -1;
 }
 
 static VkDescriptorBufferInfo zero_info(uint64_t max) {
@@ -3442,7 +3443,7 @@ static void geometry_context_log(const VkExec *ex, uint32_t op, const void *payl
 }
 
 static void bind_handles(uint64_t *dst, int cap, const p_bind_handles *b) {
-    if (b->stage < 0 || b->stage >= 6 || b->first < 0 || b->n < 0 || b->n > 32 || b->first + b->n > cap) {
+    if (b->stage < 0 || b->stage >= 8 || b->first < 0 || b->n < 0 || b->n > 32 || b->first + b->n > cap) {
         warn_once(W_BIND, "a bind of %d handles at %d of stage %d is out of range: ignored", b->n, b->first, b->stage);
         return;
     }
@@ -3498,7 +3499,7 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     }
     case OP_BIND_UBO: {
         const p_bind_buf *b = payload;
-        if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 18) ex->ubo[b->stage][b->index] = *b;
+        if (b->stage >= 0 && b->stage < 8 && b->index >= 0 && b->index < 18) ex->ubo[b->stage][b->index] = *b;
         bind_gen++;
         break;
     }
@@ -3517,10 +3518,10 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     }
     case OP_BIND_SSBO: {
         const p_bind_buf *b = payload;
-        if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16) ex->ssbo[b->stage][b->index] = *b;
+        if (b->stage >= 0 && b->stage < 8 && b->index >= 0 && b->index < 16) ex->ssbo[b->stage][b->index] = *b;
         else {   // past the table: dropped (NVN 2 binds more storage buffers per stage than NVN 1's 16)
-            static uint64_t seen[6];
-            if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 64 && !(seen[b->stage] >> b->index & 1))
+            static uint64_t seen[8];
+            if (b->stage >= 0 && b->stage < 8 && b->index >= 0 && b->index < 64 && !(seen[b->stage] >> b->index & 1))
                 seen[b->stage] |= 1ull << b->index, rt_log("vk: storage buffer %d of stage %d dropped", b->index, b->stage);
         }
         bind_gen++;
@@ -3528,24 +3529,57 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     }
     case OP_BIND_TEX: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->tex[b->stage] : NULL, 128, b);
+        bind_handles(b->stage >= 0 && b->stage < 8 ? ex->tex[b->stage] : NULL, 128, b);
         ex->tex_serial++;
         bind_gen++;
         break;
     }
     case OP_BIND_SAMP: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->samp[b->stage] : NULL, 128, b);
+        bind_handles(b->stage >= 0 && b->stage < 8 ? ex->samp[b->stage] : NULL, 128, b);
         break;
     }
     case OP_BIND_IMG: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->img[b->stage] : NULL, 32, b);
+        bind_handles(b->stage >= 0 && b->stage < 8 ? ex->img[b->stage] : NULL, 32, b);
         ex->tex_serial++;   // the shader memo's handle check (feedback_scan reads only textures: a rescan at most)
         bind_gen++;
         break;
     }
     case OP_UPDATE_UB: op_update_ub(ex, payload); break;
+    case OP_GEOMETRY_MODE: ex->geometry_mode = (uint32_t)((const p_flag *)payload)->value; break;
+    case OP_DRAW_MESH: case OP_DRAW_MESH_IND: {
+        static uint64_t seen[256], calls;
+        static unsigned nseen;
+        static int log = -1;
+        if (log < 0) log = getenv("OOT_MESH_LOG") != NULL;
+        if (!log) break;
+        if (++calls % 6000 == 0) rt_log("mesh: %llu mesh calls skipped (unsupported draw form or missing native pipeline)", (unsigned long long)calls);
+        uint64_t serial = ex->prog ? ex->prog->serial : 0;
+        int known = 0;
+        for (unsigned i = 0; i < nseen; i++) if (seen[i] == serial) known = 1;
+        if (known || nseen == 256) break;
+        seen[nseen++] = serial;
+        uint64_t address = op == OP_DRAW_MESH_IND ? ((const p_draw_mesh_ind *)payload)->addr : 0;
+        const p_draw_mesh *direct = op == OP_DRAW_MESH ? payload : NULL;
+        rt_log("mesh: replay program %llu stages %#x geometry mode %u %s first %u count %u indirect %#llx (not rendered)",
+               (unsigned long long)serial, ex->prog_stages, ex->geometry_mode, direct ? "direct" : "indirect",
+               direct ? direct->first : 0, direct ? direct->count : 0, (unsigned long long)address);
+        for (unsigned i = 0; ex->prog && i < ex->prog->nstage; i++) {
+            const uint8_t *control = ex->prog->sd[i].control, *code = (const uint8_t *)(uintptr_t)ex->prog->sd[i].data;
+            rt_log("mesh: replay stage %u native %016llx dump %016llx", i,
+                   (unsigned long long)nvn2_program_key(control, code),
+                   (unsigned long long)(control && gfx_shader_is_nvn2(control) ? gfx_shader_nvn2_hash(control, code) : nvn2_origin(code)));
+        }
+        for (int stage = 0; stage < 8; stage++) {
+            unsigned uniforms = 0, storage = 0;
+            for (int i = 0; i < 18; i++) if (ex->ubo[stage][i].addr && ex->ubo[stage][i].size) uniforms++;
+            for (int i = 0; i < 16; i++) if (ex->ssbo[stage][i].addr) storage++;
+            if (uniforms || storage) rt_log("mesh: resource stage %d UBOs %u storage %u first UBO %#llx+%#llx", stage,
+                  uniforms, storage, (unsigned long long)ex->ubo[stage][0].addr, (unsigned long long)ex->ubo[stage][0].size);
+        }
+        break;
+    }
     case OP_DRAW: op_draw(ex, payload); break;
     case OP_DRAW_IDX: op_draw_idx(ex, payload); break;
     case OP_DISPATCH: op_dispatch(ex, payload); break;

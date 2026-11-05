@@ -1092,6 +1092,33 @@ static int storage_contract_version(const char *js, const char *end) {
     return json_uint(js, end, "storage_candidates_version", &version) && version <= 1 ? (int)version : -1;
 }
 
+GfxShader *gfx_shader_fixture(int stage, const uint32_t *words, uint64_t count) {
+    if (stage < GFX_STAGE_VS || stage > GFX_STAGE_CS || !words || count < 5 || count > (1u << 20) ||
+        words[0] != 0x07230203) return NULL;
+    unsigned entries = 0;
+    for (uint64_t at = 5; at < count;) {
+        uint32_t n = words[at] >> 16, op = words[at] & 0xffff;
+        if (!n || at + n > count) return NULL;
+        if (op == 15 && (n < 4 || words[at + 1] != (uint32_t)stage || ++entries != 1)) return NULL;
+        if (op == 71 && n >= 3 && (words[at + 2] == 33 || words[at + 2] == 34)) return NULL;
+        at += n;
+    }
+    if (entries != 1) return NULL;
+    GfxShader *s = calloc(1, sizeof *s);
+    if (!s) rt_fatal("gfx_shader: fixture allocation failed");
+    s->spirv = malloc((size_t)count * 4);
+    if (!s->spirv) rt_fatal("gfx_shader: fixture code allocation failed");
+    memcpy(s->spirv, words, (size_t)count * 4);
+    s->stage = stage, s->words = count, s->spv_checked = 1;
+    rt_sha256(words, (size_t)count * 4, s->key);
+    reflect_spirv(s);
+    return s;
+}
+
+void gfx_shader_fixture_free(GfxShader *s) {
+    if (s) free(s->spirv), free(s);
+}
+
 static int reflect(GfxShader *s, int flags) {
     const int require_c0 = flags & REFLECT_REQUIRE_C0;
     static const char *const kinds[GFX_RES_KINDS] = {"cbufs", "sbufs", "textures", "images"};

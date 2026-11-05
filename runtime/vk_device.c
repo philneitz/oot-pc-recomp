@@ -202,6 +202,7 @@ typedef struct {
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl;
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT fbl;
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
+    VkPhysicalDeviceMeshShaderFeaturesEXT mesh;
 } FeatureChain;
 
 static int create_device(void) {
@@ -209,7 +210,7 @@ static int create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[28];
+    const char *ext[32];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
 
@@ -249,6 +250,7 @@ static int create_device(void) {
     if (has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) { g_vk.has_memory_budget = 1; ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME; }
     // GPU breadcrumbs for a lost device (vk_crumbs.c): AMD's drivers and RADV report it.
     if (has_ext(ep, ne, VK_AMD_BUFFER_MARKER_EXTENSION_NAME)) { g_vk.has_buffer_marker = 1; ext[n_ext++] = VK_AMD_BUFFER_MARKER_EXTENSION_NAME; }
+    OPTIONAL_EXT(has_mesh_shader, VK_EXT_MESH_SHADER_EXTENSION_NAME, mesh, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
     // Graphics pipeline library: chained last so it can be dropped again when vk_caps_gpl declines it.
     void **gpl_link = NULL;
     if (has_ext(ep, ne, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) && has_ext(ep, ne, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)) {
@@ -262,6 +264,18 @@ static int create_device(void) {
     // The driver fills the chain with what it supports; the same chain then enables all of it (robustBufferAccess
     // stays on: guest shaders index constant buffers freely and out-of-range reads must stay harmless).
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &c->f2);
+    c->mesh.multiviewMeshShader = VK_FALSE;
+    c->mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+    // OOT_MESH_SHADER=0 is a device-feature diagnostic. A cold NVIDIA cache can spend over
+    // a minute compiling existing compute pipelines after the feature set changes.
+    const char *mesh_enabled = getenv("OOT_MESH_SHADER");
+    if (mesh_enabled && !strcmp(mesh_enabled, "0"))
+        c->mesh.meshShader = c->mesh.taskShader = c->mesh.meshShaderQueries = VK_FALSE;
+    g_vk.has_mesh_shader = c->mesh.meshShader != 0;
+    g_vk.has_task_shader = c->mesh.taskShader != 0;
+    g_vk.has_mesh_queries = c->mesh.meshShaderQueries != 0;
+    rt_log("vk: mesh shaders %d, task shaders %d, mesh queries %d (OOT_MESH_SHADER=0 disables)",
+           g_vk.has_mesh_shader, g_vk.has_task_shader, g_vk.has_mesh_queries);
     vk_caps_driver(g_vk.phys);
     vk_caps_features(&c->f2.features);
     if (gpl_link) {

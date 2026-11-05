@@ -232,7 +232,7 @@ void vk_usnap_begin(const VkExec *ex, const uint64_t *handles, int n, uint64_t f
     U.ncol = 0;
     // Replay bindings persist across submissions. A stream can draw with an earlier uniform binding without
     // another OP_BIND_UBO; that range needs this submission's snapshot just as a newly bound range does.
-    for (int stage = 0; stage < 6; stage++)
+    for (int stage = 0; stage < 8; stage++)
         for (int slot = 0; slot < 18; slot++) collect_binding(&ex->ubo[stage][slot]);
     for (int i = 0; i < n; i++)
         if (handles[i]) collect(nvn_op_first(handles[i]), 0);

@@ -26,7 +26,8 @@ double gfx_window_refresh_hz(void);                        // refresh rate of th
 int gfx_window_focused(void);
 
 // ---- shader service client (gfx_shader.c)
-enum { GFX_STAGE_VS, GFX_STAGE_TCS, GFX_STAGE_TES, GFX_STAGE_GS, GFX_STAGE_FS, GFX_STAGE_CS };
+enum { GFX_STAGE_VS, GFX_STAGE_TCS, GFX_STAGE_TES, GFX_STAGE_GS, GFX_STAGE_FS, GFX_STAGE_CS,
+       GFX_STAGE_TASK, GFX_STAGE_MESH };
 enum { GFX_TEX_1D = 1, GFX_TEX_1D_ARRAY, GFX_TEX_BUFFER, GFX_TEX_2D, GFX_TEX_2D_ARRAY, GFX_TEX_2D_MS,
        GFX_TEX_2D_MS_ARRAY, GFX_TEX_3D, GFX_TEX_CUBE, GFX_TEX_CUBE_ARRAY };   // gfx_shader.c tex_names order
 enum { GFX_TYPE_FLOAT, GFX_TYPE_SINT, GFX_TYPE_UINT };
@@ -45,11 +46,16 @@ typedef struct {                                           // the translator's a
     uint8_t geometry_input;                              // GFX_GEOMETRY_*; required for GS, zero for other stages
 } GfxShaderAnswers;
 typedef struct GfxShader GfxShader;                        // SPIR-V words + parsed reflection; owned by the cache
+// Resource-free synthetic shader fixtures, owned by the caller rather than the translation cache.
+GfxShader *gfx_shader_fixture(int stage, const uint32_t *words, uint64_t count);
+void gfx_shader_fixture_free(GfxShader *shader);
 void gfx_shader_nvn2_dump(const uint8_t *control, const uint8_t *code);   // DKB_SHADER_DUMP (gfx_shader.c)
 int gfx_shader_is_nvn2(const uint8_t *control);                          // NVN 2 control block (gfx_shader.c)
 uint64_t gfx_shader_nvn2_hash(const uint8_t *control, const uint8_t *code);   // DKB_SHADER_DUMP name, 0 if not NVN 2
 int nvn2_is_tensor(const uint8_t *code);   // 1 when a lowered NVN 2 stage uses the tensor cores (HMMA/LDSM)
 uint64_t nvn2_origin(const uint8_t *code);   // that name of the NVN 2 stage a lowered code buffer came from, or 0
+uint64_t nvn2_program_key(const uint8_t *control, const uint8_t *code); // Lichii's instruction-only native key
+int nvn2_native_kind(const uint8_t *control, const uint8_t *code); // original NVN 2 control stage, or -1
 // NVN 2 stage -> NVN 1 control and Maxwell code (nvn2_lower.cpp); 0 when it does not lower
 int nvn2_lower(const uint8_t *control, const uint8_t *code, const uint8_t **out_control, const uint8_t **out_code);
 const GfxShader *gfx_shader_get(int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size,

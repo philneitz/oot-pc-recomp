@@ -29,6 +29,9 @@
 #undef NVN_PROC
 void nvnp_nvnCommandBufferPushGraphicsConstants(Cpu *c);   // NVN 2 procs the command checks record
 void nvnp_nvnCommandBufferPushComputeConstants(Cpu *c);
+void nvnp_nvnCommandBufferDrawMeshTasks(Cpu *c);
+void nvnp_nvnCommandBufferDrawMeshTasksIndirect(Cpu *c);
+void nvnp_nvnCommandBufferSetGeometryProcessingMode(Cpu *c);
 
 typedef struct { const char *name; void (*fn)(Cpu *); } ProcRow;
 static const ProcRow procs[] = {
@@ -445,6 +448,7 @@ static uint64_t record_all(void) {
     REC(OP_SET_SAMP_POOL, CALL(nvnCommandBufferSetSamplerPool, U(c), U(&sp2)));
     REC(OP_COPY_B2T, CALL(nvnCommandBufferCopyBufferToTexture, U(c), 0x9000, U(&tex1), U(&view), U(&rg), 0));
     REC(OP_COPY_STRIDE, CALL(nvnCommandBufferSetCopyRowStride, U(c), 256));
+    REC(OP_COPY_IMAGE_STRIDE, CALL(nvnCommandBufferSetCopyImageStride, U(c), 512));
     REC(OP_BLEND_COLOR, CALL(nvnCommandBufferSetBlendColor, U(c), U(rgba)));
     REC(OP_COPY_T2B, CALL(nvnCommandBufferCopyTextureToBuffer, U(c), U(&tex1), 0, U(&rg), 0xa000, 0));
     REC(OP_COPY_T2T, CALL(nvnCommandBufferCopyTextureToTexture, U(c), U(&tex1), 0, U(&rg), U(&tex2), 0, U(&rg2), 0));
@@ -461,6 +465,9 @@ static uint64_t record_all(void) {
     REC(OP_CLEAR_BUF, CALL(nvnCommandBufferReportValue, U(c), 0x1234, 0xc300));
     static const uint32_t pushed[4] = {0x39b60b61, 0x3a21d13a, 0x45340000, 0x44ca8000};   // 1/2880, 1/1620, 2880, 1620
     REC(OP_PUSH_CONST, CALL(nvnCommandBufferPushGraphicsConstants, U(c), 0, 0x10, sizeof pushed, U(pushed)));
+    REC(OP_GEOMETRY_MODE, CALL(nvnCommandBufferSetGeometryProcessingMode, U(c), 1));
+    REC(OP_DRAW_MESH, CALL(nvnCommandBufferDrawMeshTasks, U(c), 7, 11));
+    REC(OP_DRAW_MESH_IND, CALL(nvnCommandBufferDrawMeshTasksIndirect, U(c), 0xc800));
     REC(OP_WAIT_SYNC, CALL(nvnCommandBufferWaitSync, U(c), U(&syncs)));
     CALL(nvnCommandBufferPushComputeConstants, U(c), 0, 0, 2, U(pushed));   // under 4 bytes: dropped, as the driver does
     static const int thresholds[4] = {1, 2, 3, 4};
@@ -644,6 +651,7 @@ static void parse_all(uint64_t h) {
             break;
         }
         case OP_COPY_STRIDE: CHECK(((const p_copy_stride *)a)->stride == 256, "COPY_STRIDE payload"); break;
+        case OP_COPY_IMAGE_STRIDE: CHECK(((const p_copy_stride *)a)->stride == 512, "COPY_IMAGE_STRIDE payload"); break;
         case OP_BLEND_COLOR: CHECK(((const p_blend_color *)a)->rgba[2] == 0.3f, "BLEND_COLOR payload"); break;
         case OP_COPY_T2B: {
             const p_copy_b2t *p = a;
@@ -699,6 +707,13 @@ static void parse_all(uint64_t h) {
                       p->w[3] == 0x44ca8000, "PUSH_CONST payload");
             break;
         }
+        case OP_DRAW_MESH: {
+            const p_draw_mesh *p = a;
+            CHECK(p->first == 7 && p->count == 11, "DRAW_MESH first/count payload");
+            break;
+        }
+        case OP_DRAW_MESH_IND: CHECK(((const p_draw_mesh_ind *)a)->addr == 0xc800, "DRAW_MESH_IND address payload"); break;
+        case OP_GEOMETRY_MODE: CHECK(((const p_flag *)a)->value == 1, "GEOMETRY_MODE payload"); break;
         case OP_WAIT_SYNC: CHECK(((const p_wait_sync *)a)->sync == (const sync_t *)(const void *)&syncs,
                                  "WAIT_SYNC retains the submit-time source pointer"); break;
         default: CHECK(0, "unexpected op %s", nvn_op_name(o->op)); break;

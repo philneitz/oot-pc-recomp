@@ -33,6 +33,7 @@ typedef struct VkCtx {
     int has_custom_border_color, has_eds, has_eds2, has_eds3, has_vertex_input_dynamic_state,
         has_conditional_rendering, has_transform_feedback, has_provoking_vertex, has_device_fault, has_memory_budget,
         has_robustness2, has_buffer_device_address, has_fragment_shader_interlock, has_buffer_marker,
+        has_mesh_shader, has_task_shader, has_mesh_queries,
         has_astc_ldr;                       // textureCompressionASTC_LDR (enabled when reported)
     // Feedback loops (maxwell.md 1.9, vk_exec_draw.c feedback_prepare): a draw samples a target of its open pass that
     // an earlier draw of the pass wrote. TOTK_FEEDBACK=0: VK_FEEDBACK_OFF (sampled in GENERAL without a barrier, the
@@ -508,6 +509,9 @@ typedef union { VkDescriptorImageInfo image; VkDescriptorBufferInfo buffer; VkBu
 // Both return the cached pipeline (created on first use; failures are cached and logged once). info: may be NULL.
 // Valid until vk_pipeline_shutdown; thread-safe.
 VkPipeline vk_pipeline_graphics(const VkPipeState *s, const VkPipeInfo **info);
+// Mesh pipeline raster/output state follows the ordinary graphics path; task/mesh modules and layout belong to the caller.
+VkPipeline vk_pipeline_mesh_create(const VkPipeState *s, VkPipelineLayout layout, VkShaderModule mesh,
+                                   VkShaderModule task, uint32_t fragment_binding_offset);
 // The replay's variant: after vk_pipeline_async_enable a missing pipeline is built by background workers and this
 // returns VK_NULL_HANDLE with *pending 1 until it is ready (the draw is skipped); otherwise as vk_pipeline_graphics.
 // wait_ms > 0 waits up to that long for a pending pipeline first. Pipelines built in a run are recorded to

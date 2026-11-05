@@ -16,6 +16,18 @@
 #include "vk.h"
 #include "platform/platform.h"
 
+// Mesh extension calls are not packetized yet. Drain queued pipeline/state changes before calling them directly.
+void rec_draw_mesh(PFN_vkCmdDrawMeshTasksEXT fn, VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
+    rec_drain();
+    fn(cb, x, y, z);
+}
+
+void rec_draw_mesh_indirect(PFN_vkCmdDrawMeshTasksIndirectEXT fn, VkCommandBuffer cb, VkBuffer buffer,
+                            VkDeviceSize offset, uint32_t count, uint32_t stride) {
+    rec_drain();
+    fn(cb, buffer, offset, count, stride);
+}
+
 #define RING_WORDS (1u << 21)   // 16 MiB: a part of a submission is ~1-2 MiB of packets in the town
 static uint64_t ring[RING_WORDS];
 static volatile uint64_t head, tail;   // words published by the producer / consumed by the recorder

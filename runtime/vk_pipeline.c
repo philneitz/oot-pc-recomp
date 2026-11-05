@@ -1914,7 +1914,7 @@ static void gkey_fill(const VkPipeState *s, GKey *k) {
             o[3] = (uint8_t)blend_factor(b->src_a), o[4] = (uint8_t)blend_factor(b->dst_a), o[5] = (uint8_t)blend_op(b->eq_a);
         }
     }
-    if (!P.dyn_vi) {
+    if (!P.dyn_vi && s->vs) {
         VtxInput v;
         vertex_input(s, &v);
         for (uint32_t i = 0; i < v.n_attr; i++) {
@@ -1950,13 +1950,15 @@ static uint32_t vs_union_missing(const VkPipeState *s, GfxShaderIo fin[32]) {
     return missing;
 }
 
-static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Layout *l, uint32_t fs_off) {
-    if (s->gs && (l->set1 || !k->geometry_input || k->geometry_input > GFX_GEOMETRY_TRIANGLES_ADJACENCY)) return VK_NULL_HANDLE;
-    VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE, gm = VK_NULL_HANDLE;
+static VkPipeline create_graphics_with_mesh(const VkPipeState *s, const GKey *k, const Layout *l, uint32_t fs_off,
+                                            VkShaderModule mesh, VkShaderModule task) {
+    int is_mesh = mesh != VK_NULL_HANDLE;
+    if (!is_mesh && s->gs && (l->set1 || !k->geometry_input || k->geometry_input > GFX_GEOMETRY_TRIANGLES_ADJACENCY)) return VK_NULL_HANDLE;
+    VkShaderModule vm = mesh, fm = VK_NULL_HANDLE, gm = task;
     uint64_t vw, fw;
-    const uint32_t *vcode = gfx_shader_spirv(s->vs, &vw);
+    const uint32_t *vcode = is_mesh ? NULL : gfx_shader_spirv(s->vs, &vw);
     uint32_t *vpatched = NULL, *fpatched = NULL;
-    if (!s->gs && l->set1) {   // independent layouts: outputs from the vertex shader's union
+    if (!is_mesh && !s->gs && l->set1) {   // independent layouts: outputs from the vertex shader's union
         GfxShaderIo fin[32];
         uint32_t missing = vs_union_missing(s, fin);
         if (missing) {
@@ -1967,7 +1969,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
         }
     }
     if (s->fs) {
-        if (!s->gs) {
+        if (!is_mesh && !s->gs) {
             GfxShaderIo fin[32], vout[32];
             uint32_t need = gfx_shader_inputs(s->fs, fin), have = gfx_shader_outputs(s->vs, vout), missing = 0;
             for (int i = 0; i < 32; i++) {
@@ -2004,7 +2006,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
         // A bound colour target outside the shader's output map gets write mask 0 (target_wmask)
         if (fcode) fm = make_module(fcode, fw);
     }
-    if (s->gs) {
+    if (!is_mesh && s->gs) {
         uint64_t gw = 0;
         const uint32_t *gcode = gfx_shader_spirv(s->gs, &gw);
         uint32_t off = binding_span(s->vs) - 1;
@@ -2014,7 +2016,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     }
     // Only a VS linked to GS uses the GS-chain dead-distance declaration policy.
     // Plain VS/FS modules retain their original fixup path and uploaded bytes.
-    vm = make_module_linked(vcode, vw, s->gs != NULL);
+    if (!is_mesh) vm = make_module_linked(vcode, vw, s->gs != NULL);
     free(vpatched), free(fpatched);
     VkPipeline pipe = VK_NULL_HANDLE;
     if (!vm || (s->fs && !fm) || (s->gs && !gm)) goto out;
@@ -2024,19 +2026,20 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     const GfxShader *shaders[3] = {s->vs, s->gs, s->fs};
     VkShaderModule modules[3] = {vm, gm, fm};
     uint32_t stage_count = 0;
-    for (int i = 0; i < 3; i++) if (shaders[i]) {
+    const VkShaderStageFlagBits mesh_stages[3] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_TASK_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
+    for (int i = 0; i < 3; i++) if (is_mesh ? modules[i] != VK_NULL_HANDLE : shaders[i] != NULL) {
         VkPipelineShaderStageCreateInfo *st = &stages[stage_count];
         *st = (VkPipelineShaderStageCreateInfo){.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = stage_bit(gfx_shader_stage(shaders[i])), .module = modules[i], .pName = "main"};
+            .stage = is_mesh ? mesh_stages[i] : stage_bit(gfx_shader_stage(shaders[i])), .module = modules[i], .pName = "main"};
         uint64_t sw = 0;
-        const uint32_t *scode = gfx_shader_spirv(shaders[i], &sw);
-        pin_subgroup32(st, &rq[stage_count], scode, sw);
+        const uint32_t *scode = is_mesh ? NULL : gfx_shader_spirv(shaders[i], &sw);
+        if (!is_mesh) pin_subgroup32(st, &rq[stage_count], scode, sw);
         stage_count++;
     }
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     uint32_t na = 0, nb = 0;
-    if (!P.dyn_vi) {
+    if (!is_mesh && !P.dyn_vi) {
         VtxInput v;
         vertex_input(s, &v);
         for (uint32_t i = 0; i < v.n_attr; i++) va[na++] = (VkVertexInputAttributeDescription){v.a[i].location, v.a[i].binding, v.a[i].format, v.a[i].offset};
@@ -2049,7 +2052,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                                       VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST};
     VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
                                                  .topology = class_base[k->topo_class]};
-    if (s->gs) {
+    if (!is_mesh && s->gs) {
         static const VkPrimitiveTopology gs_base[] = {VK_PRIMITIVE_TOPOLOGY_POINT_LIST, VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
             VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY};
@@ -2087,18 +2090,39 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                               .attachmentCount = k->n_color, .pAttachments = cba};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = P.n_dyn, .pDynamicStates = P.dyn};
+    VkDynamicState mesh_dynamic[64];
+    if (is_mesh) {
+        dy.dynamicStateCount = 0;
+        dy.pDynamicStates = mesh_dynamic;
+        for (uint32_t i = 0; i < P.n_dyn; i++) {
+            VkDynamicState state = P.dyn[i];
+            if (state == VK_DYNAMIC_STATE_VERTEX_INPUT_EXT || state == VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE ||
+                state == VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY || state == VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE) continue;
+            mesh_dynamic[dy.dynamicStateCount++] = state;
+        }
+    }
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = k->n_color,
                                         .pColorAttachmentFormats = (const VkFormat *)k->color,
                                         .depthAttachmentFormat = (VkFormat)k->depth, .stencilAttachmentFormat = (VkFormat)k->stencil};
     VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
-                                       .stageCount = stage_count, .pStages = stages, .pVertexInputState = &vi,
-                                       .pInputAssemblyState = &ia, .pViewportState = &vp, .pRasterizationState = &rs,
+                                       .stageCount = stage_count, .pStages = stages, .pVertexInputState = is_mesh ? NULL : &vi,
+                                       .pInputAssemblyState = is_mesh ? NULL : &ia, .pViewportState = &vp, .pRasterizationState = &rs,
                                        .pMultisampleState = &ms, .pDepthStencilState = &ds, .pColorBlendState = &cb,
                                        .pDynamicState = &dy, .layout = l->layout};
     if (k->fbl & 1) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     if (k->fbl & 2) pi.flags |= VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+    int build_log = getenv("OOT_PIPE_BUILD_LOG") != NULL;
+    const uint8_t *vk = s->vs ? gfx_shader_key(s->vs) : NULL, *fk = s->fs ? gfx_shader_key(s->fs) : NULL;
+    uint64_t build_started = build_log ? plat_now_ns() : 0;
+    if (build_log) rt_log("vk_pipeline: graphics build begin mesh %d vs %02x%02x%02x%02x fs %02x%02x%02x%02x", is_mesh,
+                         vk ? vk[0] : 0, vk ? vk[1] : 0, vk ? vk[2] : 0, vk ? vk[3] : 0,
+                         fk ? fk[0] : 0, fk ? fk[1] : 0, fk ? fk[2] : 0, fk ? fk[3] : 0);
     uint64_t p0 = perf_begin();
     VkResult r = vkCreateGraphicsPipelines(P.device, P.cache, 1, &pi, NULL, &pipe);
+    if (build_log) rt_log("vk_pipeline: graphics build end mesh %d vs %02x%02x%02x%02x fs %02x%02x%02x%02x %.1f ms result %d", is_mesh,
+                         vk ? vk[0] : 0, vk ? vk[1] : 0, vk ? vk[2] : 0, vk ? vk[3] : 0,
+                         fk ? fk[0] : 0, fk ? fk[1] : 0, fk ? fk[2] : 0, fk ? fk[3] : 0,
+                         (plat_now_ns() - build_started) / 1e6, (int)r);
     perf_end(PERF_PIPE, p0);   // counts on the render thread only, so background builds stay out of it
     if (r != VK_SUCCESS) {
         rt_log("vk_pipeline: vkCreateGraphicsPipelines failed (%d)", (int)r);
@@ -2107,10 +2131,23 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
         perf_count(PERF_CNT_PIPE_BUILT);
     }
 out:
-    if (vm) vkDestroyShaderModule(P.device, vm, NULL);
+    if (vm && !is_mesh) vkDestroyShaderModule(P.device, vm, NULL);
     if (fm) vkDestroyShaderModule(P.device, fm, NULL);
-    if (gm) vkDestroyShaderModule(P.device, gm, NULL);
+    if (gm && !is_mesh) vkDestroyShaderModule(P.device, gm, NULL);
     return pipe;
+}
+
+static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Layout *l, uint32_t fs_off) {
+    return create_graphics_with_mesh(s, k, l, fs_off, VK_NULL_HANDLE, VK_NULL_HANDLE);
+}
+
+VkPipeline vk_pipeline_mesh_create(const VkPipeState *s, VkPipelineLayout layout, VkShaderModule mesh,
+                                   VkShaderModule task, uint32_t fragment_binding_offset) {
+    if (!mesh || !vk_ctx()->has_mesh_shader || (task && !vk_ctx()->has_task_shader) || !ensure_init()) return VK_NULL_HANDLE;
+    GKey key;
+    gkey_fill(s, &key);
+    Layout binding_layout = {.layout = layout};
+    return create_graphics_with_mesh(s, &key, &binding_layout, fragment_binding_offset, mesh, task);
 }
 
 // ---- graphics pipeline library (vk_caps.gpl)
@@ -3195,9 +3232,16 @@ static VkPipeline compute_create(const GfxShader *cs, const Layout *l) {
                                       .layout = l->layout};
     pin_subgroup32(&ci.stage, &rqc, code, words);
     VkPipeline pipe = VK_NULL_HANDLE;
+    int build_log = getenv("OOT_PIPE_BUILD_LOG") != NULL;
+    const uint8_t *build_key = gfx_shader_key(cs);
+    if (build_log) rt_log("vk_pipeline: compute build begin %02x%02x%02x%02x%02x%02x%02x%02x (%llu words)",
+                         build_key[0], build_key[1], build_key[2], build_key[3], build_key[4], build_key[5], build_key[6], build_key[7],
+                         (unsigned long long)words);
     uint64_t t0 = qpc();
     if (vkCreateComputePipelines(P.device, P.cache, 1, &ci, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
     double ms = ms_since(t0);
+    if (build_log) rt_log("vk_pipeline: compute build end %02x%02x%02x%02x%02x%02x%02x%02x %.1f ms", build_key[0],
+                         build_key[1], build_key[2], build_key[3], build_key[4], build_key[5], build_key[6], build_key[7], ms);
     if (ms > 200) {   // the driver's compiler: a slow build here also held gigabytes of host memory (jeprof, nvvm)
         const uint8_t *k = gfx_shader_key(cs);
         rt_log("vk_pipeline: compute pipeline %02x%02x%02x%02x%02x%02x%02x%02x... (%llu KB of SPIR-V) took %.0f ms to build%s",

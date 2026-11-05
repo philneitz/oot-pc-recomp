@@ -22,7 +22,7 @@ constexpr size_t kC0Layout = 0x860;  // "DKC1" + compute parameter layout (gfx_s
 constexpr uint64_t kMaxwellNop = 0x50b0000000070f00ull;
 constexpr uint64_t kMaxwellExit = 0xe30000000007000full;
 
-struct Lowered { std::vector<uint8_t> control; std::vector<uint64_t> code; uint64_t origin; bool tensor = false; };
+struct Lowered { std::vector<uint8_t> control; std::vector<uint64_t> code; uint64_t origin, native_key; int kind; bool tensor = false; };
 std::mutex lock;
 // Keyed by content, not by address: a game frees program memory and loads other shaders at the same place (a scene
 // change), and an address key handed those the old lowering. The key is gfx_shader_nvn2_hash (the dump name).
@@ -40,6 +40,14 @@ bool uses_tensor(const std::vector<Shader::Ampere::Instruction> &native) {
         if (op == 0x23c || op == 0x83b) return true;   // HMMA.16816/.1688, LDSM
     }
     return false;
+}
+
+uint64_t native_key(const std::vector<Shader::Ampere::Instruction> &native) {
+    uint64_t hash = 0xcbf29ce484222325ull;
+    for (const auto &instruction : native)
+        for (uint32_t word : instruction.words)
+            for (unsigned byte = 0; byte < 4; byte++) hash = (hash ^ ((word >> (8 * byte)) & 255)) * 0x100000001b3ull;
+    return hash;
 }
 
 void put32(std::vector<uint8_t> &c, size_t at, uint32_t v) { std::memcpy(c.data() + at, &v, 4); }
@@ -86,6 +94,8 @@ Lowered *lower(const uint8_t *control, const uint8_t *code) {
     }
 
     auto *out = new Lowered;
+    out->kind = control[0x56];
+    out->native_key = native_key(native);
     out->tensor = uses_tensor(native);
     auto &m = out->code;
     // The lowering places instruction 0 at 0x10 modulo 32 with a scheduling word at every 32-byte boundary. Ryujinx
@@ -200,6 +210,42 @@ extern "C" uint64_t nvn2_origin(const uint8_t *code) {
     std::lock_guard<std::mutex> g(lock);
     auto it = origins.find(code);
     return it == origins.end() ? 0 : it->second;
+}
+
+extern "C" int nvn2_native_kind(const uint8_t *control, const uint8_t *code) {
+    if (!control || !code) return -1;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        const auto it = origins.find(code);
+        if (it != origins.end()) return cache.at(it->second)->kind;
+    }
+    uint32_t magic, version;
+    std::memcpy(&magic, control, 4), std::memcpy(&version, control + 4, 4);
+    return magic == 0x98761234 && version == 201 ? control[0x56] : -1;
+}
+
+extern "C" uint64_t nvn2_program_key(const uint8_t *control, const uint8_t *code) {
+    if (!control || !code) return 0;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        const auto it = origins.find(code);
+        if (it != origins.end()) return cache.at(it->second)->native_key;
+    }
+    if (!gfx_shader_nvn2_hash(control, code)) return 0;
+    uint32_t len, w0;
+    std::memcpy(&len, control + 0x38, 4), std::memcpy(&w0, code, 4);
+    uint32_t header = ((w0 & 31) == 1 || (w0 & 31) == 2) && ((w0 >> 5) & 31) == 4 ? 0x80 : 0;
+    Shader::Ampere::ProgramCaptureState capture;
+    std::vector<Shader::Ampere::Instruction> native;
+    for (uint32_t off = header; off + 16 <= len; off += 16) {
+        Shader::Ampere::Instruction instruction;
+        std::memcpy(instruction.words.data(), code + off, 16);
+        native.push_back(instruction);
+        auto result = capture.Observe(instruction, static_cast<uint32_t>(native.size() - 1));
+        if (result == Shader::Ampere::ProgramCaptureState::Result::InvalidTarget) return 0;
+        if (result == Shader::Ampere::ProgramCaptureState::Result::Complete) return native_key(native);
+    }
+    return 0;
 }
 
 // 1 when a lowered code buffer is a stage that uses the tensor cores (HMMA/LDSM).

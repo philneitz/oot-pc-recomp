@@ -80,9 +80,10 @@ typedef struct VkExec {
     // ---- vk_exec_draw.c slots (draws, binds, dispatch): left empty by vk_exec.c
     const prog_t *prog;                  // OP_BIND_PROGRAM
     int32_t prog_stages;
+    uint32_t geometry_mode;              // OP_GEOMETRY_MODE; native SPH types alone do not distinguish mesh stages
     NVNbufferRange vbuf[16];             // OP_BIND_VBUF
-    p_bind_buf ubo[6][18], ssbo[6][16];  // OP_BIND_UBO / OP_BIND_SSBO per stage and index
-    uint64_t tex[6][128], samp[6][128], img[6][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
+    p_bind_buf ubo[8][18], ssbo[8][16];  // NVN 2 also binds resources in stage slots 6 and 7
+    uint64_t tex[8][128], samp[8][128], img[8][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
     uint32_t push[2][NVN2_ROOT_TABLES][NVN2_ROOT_WORDS];   // graphics root 0 (bank 24), compute roots in packed c0
     uint64_t push_set[2][NVN2_ROOT_TABLES];                // words written; used by the graphics blit fallback
 

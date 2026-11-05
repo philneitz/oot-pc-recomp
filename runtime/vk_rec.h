@@ -21,6 +21,9 @@ void rec_end(void);                   // waits for the recorder; no-op when rec_
 // when it records cb, and the wait for it (1); otherwise rec_end and the breadcrumb, and the caller ends cb (0).
 int rec_end_cb(VkCommandBuffer cb, int crumb, uint64_t n);
 void rec_drain(void);                 // waits until the recorder made every call queued so far
+void rec_draw_mesh(PFN_vkCmdDrawMeshTasksEXT fn, VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z);
+void rec_draw_mesh_indirect(PFN_vkCmdDrawMeshTasksIndirectEXT fn, VkCommandBuffer cb, VkBuffer buffer,
+                            VkDeviceSize offset, uint32_t count, uint32_t stride);
 void rec_stats_log(void);             // TOTK_TRACE=perf: packets, bytes, drains and waits since the last call
 
 // Extension commands called through device function pointers.

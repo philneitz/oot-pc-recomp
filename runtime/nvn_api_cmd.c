@@ -586,10 +586,19 @@ NVN_API(nvnCommandBufferSetRenderEnableConditional) {
     r->addr = arg_x(c, 2);
 }
 // void nvnCommandBufferBindProgram(NVNcommandBuffer *cmd, const NVNprogram *program, int stages)
-extern _Thread_local const prog_t *nvn2_last_program;   // nvn_api_nvn2.c mesh_note (OOT_MESH_LOG)
 NVN_API(nvnCommandBufferBindProgram) {
     *REC(cmd_of(c), OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){arg_p(c, 1), (int)arg_x(c, 2)};
-    nvn2_last_program = arg_p(c, 1);
+}
+// Mesh program identity belongs to replay state: a draw may inherit a binding from another command buffer or thread.
+NVN_API(nvnCommandBufferDrawMeshTasks) {
+    *REC(cmd_of(c), OP_DRAW_MESH, p_draw_mesh) = (p_draw_mesh){(uint32_t)arg_x(c, 1), (uint32_t)arg_x(c, 2), c->x[30]};
+}
+NVN_API(nvnCommandBufferDrawMeshTasksIndirect) {
+    *REC(cmd_of(c), OP_DRAW_MESH_IND, p_draw_mesh_ind) = (p_draw_mesh_ind){arg_x(c, 1), c->x[30]};
+}
+NVN_API(nvnCommandBufferSetGeometryProcessingMode) {
+    *REC(cmd_of(c), OP_GEOMETRY_MODE, p_flag) = (p_flag){(int)arg_x(c, 1)};
+    nvn_mode_trace(NVN_MODE_GEOMETRY, (uintptr_t)cmd_of(c), arg_x(c, 1), 0, 0);
 }
 // void nvnCommandBufferBind{Blend,Color,ChannelMask,Multisample,Polygon,DepthStencil}State(NVNcommandBuffer *cmd,
 // const NVN*State *state): the state object's bytes are copied (p_bind_state.kind order)
@@ -1104,6 +1113,7 @@ const char *nvn_op_name(uint32_t op) {
         "DRAW_IDX", "DISPATCH", "BARRIER", "SET_TEX_POOL", "SET_SAMP_POOL", "COPY_B2T", "COPY_STRIDE", "BLEND_COLOR",
         "COPY_T2B", "BIND_IMG", "COPY_T2T", "RESET_COUNTER", "CLEAR_TEX", "DEPTH_CLAMP", "RENDER_ENABLE",
         "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF", "PUSH_CONST", "WAIT_SYNC", "COPY_IMAGE_STRIDE",
+        "DRAW_MESH", "DRAW_MESH_IND", "GEOMETRY_MODE",
     };
     _Static_assert(sizeof names / sizeof *names == OP_COUNT_, "one name per op");
     return op < OP_COUNT_ ? names[op] : "?";

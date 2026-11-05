@@ -892,6 +892,146 @@ static int snapshot_pending_record(VkCommandBuffer cb, uint64_t fence, uint64_t 
     return vk_exec_record_work(cb, fence, ticks, snapshot_pending_work, context);
 }
 
+typedef struct {
+    VkShaderModule mesh, task;
+    GfxShader *fragment;
+    VkPipelineLayout layout;
+    VkPipeline pipeline;
+    int failed;
+} MeshProbe;
+
+static uint32_t *mesh_fixture_read(const char *name, uint64_t *words) {
+    const char *directory = getenv("OOT_MESH_PROBE_DIR");
+    if (!directory) return NULL;
+    char path[PLAT_PATH_MAX];
+    if (snprintf(path, sizeof path, "%s/%s", directory, name) >= (int)sizeof path) return NULL;
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long bytes = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint32_t *code = bytes >= 20 && bytes <= (1 << 20) && !(bytes & 3) ? malloc((size_t)bytes) : NULL;
+    if (code && fread(code, 1, (size_t)bytes, f) != (size_t)bytes) free(code), code = NULL;
+    fclose(f);
+    if (code) *words = (uint64_t)bytes / 4;
+    return code;
+}
+
+static VkShaderModule mesh_fixture_module(const char *name) {
+    uint64_t words = 0;
+    uint32_t *code = mesh_fixture_read(name, &words);
+    VkShaderModule result = VK_NULL_HANDLE;
+    if (code) {
+        VkShaderModuleCreateInfo info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                                         .codeSize = (size_t)words * 4, .pCode = code};
+        vkCreateShaderModule(vk_ctx()->device, &info, NULL, &result);
+    }
+    free(code);
+    return result;
+}
+
+static void mesh_probe_work(VkExec *ex, void *context) {
+    MeshProbe *p = context;
+    vk_exec_pass_begin(ex);
+    VkPipeState state = ex->pipe;
+    state.vs = state.gs = NULL;
+    state.fs = p->fragment;
+    state.prim = NVN_DRAW_PRIMITIVE_TRIANGLES;
+    state.y_flip = 1;
+    state.poly.cull = 0;
+    p->pipeline = vk_pipeline_mesh_create(&state, p->layout, p->mesh, p->task, 0);
+    PFN_vkCmdDrawMeshTasksEXT draw = (PFN_vkCmdDrawMeshTasksEXT)vkGetDeviceProcAddr(vk_ctx()->device, "vkCmdDrawMeshTasksEXT");
+    if (!p->pipeline || !draw) { p->failed = 1; return; }
+    vkCmdBindPipeline(ex->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->pipeline);
+    vk_pipeline_set_dynamic(ex->cb, &state);
+    VkViewport viewport = {0, TEX_H, TEX_W, -TEX_H, 0, 1};
+    VkRect2D scissor = {{0, 0}, {TEX_W, TEX_H}};
+    vkCmdSetViewportWithCount(ex->cb, 1, &viewport);
+    vkCmdSetScissorWithCount(ex->cb, 1, &scissor);
+    vkCmdSetDepthBias(ex->cb, 0, 0, 0);
+    vkCmdSetLineWidth(ex->cb, 1);
+    vkCmdSetStencilCompareMask(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, ~0u);
+    vkCmdSetStencilWriteMask(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, ~0u);
+    vkCmdSetStencilReference(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
+    const float blend[4] = {0};
+    vkCmdSetBlendConstants(ex->cb, blend);
+    rec_draw_mesh(draw, ex->cb, 1, 1, 1);
+    ex->recorded++;
+}
+
+static int mesh_probe_record(VkCommandBuffer cb, uint64_t fence, uint64_t ticks, void *context) {
+    return vk_exec_record_work(cb, fence, ticks, mesh_probe_work, context);
+}
+
+int probe_vkmesh(void) {
+    const GfxBackend *b = &gfx_vulkan_backend;
+    uint64_t heap;
+    CHECK(!mem_set_heap_size(4ull << 20, &heap) && heap, "mesh probe heap");
+    pool_t pool = {.magic = NVN_POOL_MAGIC, .flags = 0x22, .mem = (uint8_t *)(uintptr_t)heap,
+                   .game_mem = (uint8_t *)(uintptr_t)heap, .size = 0x100000};
+    CHECK(b->pool_init(&pool), "mesh probe pool");
+    if (!vk_ctx()->has_mesh_shader) {
+        b->pool_fini(&pool);
+        vk_backend_shutdown();
+        printf("probe-vkmesh: skipped (VK_EXT_mesh_shader not supported)\n");
+        return 0;
+    }
+    tex_t target;
+    init_tex(&target, &pool, 0, NVN_FORMAT_RGBA8);
+    MeshProbe p = {0};
+    uint64_t fragment_words = 0;
+    uint32_t *fragment = mesh_fixture_read("fragment.spv", &fragment_words);
+    CHECK(fragment, "mesh fixture files missing (run tests/vk_mesh_probe.py)");
+    p.fragment = gfx_shader_fixture(GFX_STAGE_FS, fragment, fragment_words);
+    free(fragment);
+    CHECK(p.fragment, "mesh probe fragment fixture");
+    VkCtx *c = vk_ctx();
+    VkPipelineLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    CHECK(vkCreatePipelineLayout(c->device, &li, NULL, &p.layout) == VK_SUCCESS, "mesh probe layout");
+    int variants = c->has_task_shader ? 2 : 1;
+    uint8_t *pixels = malloc(TEX_W * TEX_H * 4);
+    CHECK(pixels, "mesh pixel buffer");
+    for (int variant = 0; variant < variants; variant++) {
+        p.mesh = mesh_fixture_module(variant ? "mesh-task.spv" : "mesh.spv");
+        p.task = variant ? mesh_fixture_module("task.spv") : VK_NULL_HANDLE;
+        CHECK(p.mesh && (!variant || p.task), "mesh/task fixture modules");
+        _Alignas(8) uint8_t stream[4096];
+        p_set_rt rt = {.n = 1, .color = {&target}};
+        p_clear_color clear = {.index = 0, .mask = 15, .rgba = {0, 0, 0, 1}};
+        uint8_t *end = put(stream, OP_BEGIN, NULL, 0);
+        end = put(end, OP_SET_RT, &rt, sizeof rt);
+        end = put(end, OP_CLEAR_COLOR, &clear, sizeof clear);
+        put(end, OP_END, NULL, 0);
+        uint64_t handle = (uint64_t)(uintptr_t)stream;
+        uint64_t fence = b->submit(&handle, 1, rt_ticks());
+        CHECK(b->fence_wait(fence, 5000000000ull), "mesh clear fence");
+        fence = vk_sync_submit_record(mesh_probe_record, &p, rt_ticks());
+        CHECK(b->fence_wait(fence, 10000000000ull) && !p.failed, "mesh draw fence/pipeline");
+        NVNcopyRegion region = {.width = TEX_W, .height = TEX_H, .depth = 1};
+        b->read_texels(&target, NULL, &region, pixels, TEX_W * 4, TEX_W * TEX_H * 4);
+        const uint8_t *center = pixels + 4 * (TEX_W * (TEX_H / 2) + TEX_W / 2);
+        CHECK(center[variant ? 1 : 0] == 255 && center[variant ? 0 : 1] == 0 && center[2] == 0 && center[3] == 255,
+              "mesh variant %d center %u,%u,%u,%u", variant, center[0], center[1], center[2], center[3]);
+        CHECK(!pixels[0] && !pixels[1] && !pixels[2] && pixels[3] == 255, "mesh triangle changed the outside pixel");
+        vkDestroyPipeline(c->device, p.pipeline, NULL);
+        vkDestroyShaderModule(c->device, p.mesh, NULL);
+        if (p.task) vkDestroyShaderModule(c->device, p.task, NULL);
+    }
+    free(pixels);
+    vkDestroyPipelineLayout(c->device, p.layout, NULL);
+    b->texture_release(&target);
+    b->pool_fini(&pool);
+    b->finish();
+    vk_pipeline_shutdown();
+    gfx_shader_fixture_free(p.fragment);
+    vk_exec_draw_shutdown();
+    vk_exec_xfer_shutdown();
+    vk_backend_shutdown();
+    CHECK(!vk_validation_errors_total(), "mesh probe validation errors");
+    printf("probe-vkmesh: passed (%d rasterized variants; mesh triangle and task payload colour checked)\n", variants);
+    return 0;
+}
+
 int probe_vkusnap(void) {
     const GfxBackend *b = &gfx_vulkan_backend;
     uint64_t heap;
