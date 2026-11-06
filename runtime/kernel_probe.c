@@ -431,6 +431,21 @@ static void test_cores(Cpu *c) {
 
 // ---- fibers: two fibers switch to each other; each checks its callee-saved registers, sp and tpidr survive
 typedef struct { uint64_t self, other; int id; } FiberJob;
+
+// A C function is entered with rsp 8 bytes off a 16-byte boundary. The fiber entry stub realigns the stack that
+// plat_fiber_swap's ret leaves behind; entered 8 bytes off, every frame in the fiber is off by 8 and a libc function
+// that stores with movaps (pthread_create, called from a fiber's CreateThread) faults.
+#if defined(__linux__) && defined(__x86_64__)
+uint64_t probe_stack_parity(void);
+__asm__(".text\n"
+        ".globl probe_stack_parity\n"
+        ".p2align 4\n"
+        "probe_stack_parity:\n"
+        "    movq %rsp, %rax\n"
+        "    andq $15, %rax\n"
+        "    ret\n");
+static uint64_t g_main_parity, g_fiber_parity;
+#endif
 static volatile int32_t g_switches, g_runs[3];
 static volatile int g_last_fiber;
 static long g_fiber_bad, g_fiber_turns;
@@ -453,6 +468,9 @@ static void fiber_fn(Cpu *c) {
     FiberJob *j = arg_p(c, 0);
     uint64_t save[10];
     __uint128_t vsave[8];
+#if defined(__linux__) && defined(__x86_64__)
+    g_fiber_parity = probe_stack_parity();
+#endif
     for (;;) {
         long n = g_switches;
         if (n >= FIBER_SWITCHES) {
@@ -479,6 +497,9 @@ static void test_fibers(Cpu *c) {
     rt_call(c, a_fib_init, 6, fb, a_fiber_fn, ga(&jb), sb, (uint64_t)STACK, (uint64_t)0);
     g_switches = g_runs[1] = g_runs[2] = 0;
     g_fiber_bad = g_fiber_turns = 0;
+#if defined(__linux__) && defined(__x86_64__)
+    g_main_parity = probe_stack_parity();
+#endif
     uint64_t save[10];
     __uint128_t vsave[8];
     set_regs(c, 0x5555, save, vsave);
@@ -491,10 +512,20 @@ static void test_fibers(Cpu *c) {
     rt_call(c, a_fib_fin, 1, fb);
     int ok = g_switches == FIBER_SWITCHES && g_runs[1] == FIBER_SWITCHES / 2 && g_runs[2] == FIBER_SWITCHES / 2 &&
              !g_fiber_turns && !g_fiber_bad && base_ok;
+#if defined(__linux__) && defined(__x86_64__)
+    int parity_ok = g_main_parity == 8 && g_fiber_parity == 8;
+    printf("fibers: %d switches (fiber 1 %d, fiber 2 %d, %ld out of turn) in %.1f ms (%.3f us each), %ld register "
+           "mismatches, thread context %s, stack parity %llu/%llu (main/fiber): %s\n", g_switches, g_runs[1], g_runs[2],
+           g_fiber_turns, ms, ms * 1000.0 / (double)(g_switches ? g_switches : 1), g_fiber_bad,
+           base_ok ? "preserved" : "CHANGED", (unsigned long long)g_main_parity, (unsigned long long)g_fiber_parity,
+           ok && parity_ok ? "ok" : "FAIL");
+    ok = ok && parity_ok;
+#else
     printf("fibers: %d switches (fiber 1 %d, fiber 2 %d, %ld out of turn) in %.1f ms (%.3f us each), %ld register "
            "mismatches, thread context %s: %s\n", g_switches, g_runs[1], g_runs[2], g_fiber_turns, ms,
            ms * 1000.0 / (double)(g_switches ? g_switches : 1), g_fiber_bad, base_ok ? "preserved" : "CHANGED",
            ok ? "ok" : "FAIL");
+#endif
     CHECK(ok, "fiber ping-pong");
 }
 
