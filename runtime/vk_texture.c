@@ -224,7 +224,10 @@ static int format_compressed(VkFormat f) {   // vkCmdClearColorImage takes no bl
 static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) {
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(c->device, img, &req);
-    if ((e->f.depth || e->f.stencil) && req.size > guest_size) return 0;
+    // Converted formats can expand compressed guest storage. Include Vulkan's allocation padding;
+    // spilling beyond the texture would alias its neighbors. Returning zero selects the own-image allocation.
+    int converted = e->f.vk != e->f.ideal;
+    if ((converted || e->f.depth || e->f.stencil) && req.size > guest_size) return 0;
     VkMemSpan sp;
     if (!req.size) return 0;   // an image the device could not lay out (image_size)
     if (!vk_mem_resolve_existing(e->pub.addr, req.size, &sp) || !sp.alloc || sp.alloc_offset % req.alignment) return 0;
