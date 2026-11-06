@@ -107,10 +107,16 @@ static void ov_vsync_event(Cpu *c) {
 }
 
 // ---- Switch 2 vi calls (Donkey Kong Bananza): the host presents SDR with a fixed swap interval and no VRR.
-// Result QueryDisplayHdrStatus(bool *enabled, HdrOutputFormat *format, u16 *?, const Display *): HDR off
+// Result QueryDisplayHdrStatus(bool *enabled, HdrOutputFormat *format, u16 *peak_nits, const Display *): HDR off, SDR
+// output (format 1) on a 400-nit panel, the answer Lichii gives; every output is written. A test showed this does not
+// change Ocarina of Time's exposure or light values (their difference to Lichii comes from a GPU-measured term).
 static void ov_hdr_status(Cpu *c) {
     uint8_t *on = arg_p(c, 0);
+    uint32_t *format = arg_p(c, 1);
+    uint16_t *peak = arg_p(c, 2);
     if (on) *on = 0;
+    if (format) *format = 1;
+    if (peak) *peak = 400;
     ret_x(c, 0);
 }
 // Result QueryDisplayHdrPaperWhite(u16 *nits, const Display *): the BT.2408 reference white, 203 nits
