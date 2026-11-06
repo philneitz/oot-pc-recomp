@@ -277,7 +277,19 @@ static class SwshXlate
         // "subgroup": n: lanes per subgroup when the host cannot pin 32 (AMD GCN/Vega run 64): ballots and votes span n lanes.
         public int QueryHostSubgroupSize() => _job["subgroup"] is JsonNode n ? (int)n : 32;
         // The translator's own warnings (a global access with no storage buffer found, ...), with DMSH_STACK set.
-        public void Log(string message) { if (Environment.GetEnvironmentVariable("DMSH_STACK") != null) Console.Error.WriteLine(message); }
+        public void Log(string message)
+        {
+            if (Environment.GetEnvironmentVariable("DMSH_STACK") != null) Console.Error.WriteLine(message);
+            // OOT_XLATE_LOG=<file>: the same warnings with the shader key appended to a file (stderr of --serve children is
+            // not kept by the runtime). Diagnostic: counts, for example, the bindless accesses the translator drops.
+            if (Environment.GetEnvironmentVariable("OOT_XLATE_LOG") is string path && path.Length > 0)
+                lock (LogLock)
+                    for (int attempt = 0; attempt < 50; attempt++)   // several translator processes share the file
+                        try { System.IO.File.AppendAllText(path, $"{(string)_job["key"]} {message}{Environment.NewLine}"); break; }
+                        catch (System.IO.IOException) { System.Threading.Thread.Sleep(2); }
+                        catch (Exception) { break; }   // an unusable path must not fail the translation
+        }
+        static readonly object LogLock = new();
     }
 
 
