@@ -1,0 +1,32 @@
+--- a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
++++ b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+@@ -27,7 +27,8 @@
+                         // use, and removing the assignment removed the operation itself (the reduction kernel c7830fac
+                         // lost its atomicMin on 2026-10-13; every translation ran in DebugMode since, to avoid this).
+                         bool sideEffects = HasSideEffects(assignment.Source);
+-                        bool isWorthPropagating = !sideEffects && (propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source));
++                        bool isWorthPropagating = !sideEffects && !IsSubgroupSensitive(assignment.Source) &&
++                            (propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source));
+
+                         // TOTK: SPIR-V passes call arguments by pointer to a variable (StructuredProgram copies them
+                         // into temporaries); folding an expression into a call argument breaks GenerateCall.
+@@ -76,6 +77,19 @@
+             return false;
+         }
+
++        private static bool IsSubgroupSensitive(IAstNode source)
++        {
++            // Subgroup results depend on the invocations active at their original
++            // evaluation site. Inlining a ballot or shuffle into a divergent use
++            // changes that set even when none of its explicit operands changed.
++            // Keep the operation materialized; ordinary pure expressions can still
++            // propagate its local result, and dead unused results can still vanish.
++            return source is AstOperation op && (op.Inst & Instruction.Mask) is
++                Instruction.Ballot or Instruction.VoteAll or Instruction.VoteAllEqual or
++                Instruction.VoteAny or Instruction.Shuffle or Instruction.ShuffleDown or
++                Instruction.ShuffleUp or Instruction.ShuffleXor or Instruction.SwizzleAdd;
++        }
++
+         private static bool IsWorthPropagating(IAstNode source)
+         {
+             if (source is not AstOperation srcOp)
