@@ -1,0 +1,16 @@
+--- a/src/Ryujinx.Graphics.Shader/Instructions/InstEmitMemory.cs
++++ b/src/Ryujinx.Graphics.Shader/Instructions/InstEmitMemory.cs
+@@ -133,7 +133,12 @@ namespace Ryujinx.Graphics.Shader.Instructions
+         {
+             InstRed op = context.GetOp<InstRed>();
+
+-            (Operand addrLow, Operand addrHigh) = Get40BitsAddress(context, new Register(op.SrcA, RegisterType.Gpr), op.E, op.Imm20);
++            // Register-relative RED offsets are signed 20-bit values. With RZ the
++            // immediate is an absolute address and keeps its unsigned encoding.
++            int offset = op.SrcA == RegisterConsts.RegisterZeroIndex
++                ? op.Imm20 : (op.Imm20 << 12) >> 12;
++
++            (Operand addrLow, Operand addrHigh) = Get40BitsAddress(context, new Register(op.SrcA, RegisterType.Gpr), op.E, offset);
+
+             EmitAtomicOp(context, StorageKind.GlobalMemory, (AtomOp)op.RedOp, op.RedSize, addrLow, addrHigh, GetDest(op.SrcB));
+         }
