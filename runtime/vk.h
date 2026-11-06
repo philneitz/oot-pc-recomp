@@ -512,6 +512,8 @@ VkPipeline vk_pipeline_graphics(const VkPipeState *s, const VkPipeInfo **info);
 // Mesh pipeline raster/output state follows the ordinary graphics path; task/mesh modules and layout belong to the caller.
 VkPipeline vk_pipeline_mesh_create(const VkPipeState *s, VkPipelineLayout layout, VkShaderModule mesh,
                                    VkShaderModule task, uint32_t fragment_binding_offset);
+// Process-local digest of the normalized mesh pipeline state; excludes dynamic state and unused vertex inputs.
+int vk_pipeline_mesh_key(const VkPipeState *s, uint8_t key[32]);
 // The replay's variant: after vk_pipeline_async_enable a missing pipeline is built by background workers and this
 // returns VK_NULL_HANDLE with *pending 1 until it is ready (the draw is skipped); otherwise as vk_pipeline_graphics.
 // wait_ms > 0 waits up to that long for a pending pipeline first. Pipelines built in a run are recorded to

@@ -2141,6 +2141,14 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     return create_graphics_with_mesh(s, k, l, fs_off, VK_NULL_HANDLE, VK_NULL_HANDLE);
 }
 
+int vk_pipeline_mesh_key(const VkPipeState *s, uint8_t key[32]) {
+    if (!s || s->vs || s->gs || !key || !ensure_init()) return 0;
+    GKey normalized;
+    gkey_fill(s, &normalized);
+    rt_sha256(&normalized, sizeof normalized, key);
+    return 1;
+}
+
 VkPipeline vk_pipeline_mesh_create(const VkPipeState *s, VkPipelineLayout layout, VkShaderModule mesh,
                                    VkShaderModule task, uint32_t fragment_binding_offset) {
     if (!mesh || !vk_ctx()->has_mesh_shader || (task && !vk_ctx()->has_task_shader) || !ensure_init()) return VK_NULL_HANDLE;

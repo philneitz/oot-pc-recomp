@@ -3591,6 +3591,14 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
             for (int i = 0; i < 16; i++) if (ex->ssbo[stage][i].addr) storage++;
             if (uniforms || storage) rt_log("mesh: resource stage %d UBOs %u storage %u first UBO %#llx+%#llx", stage,
                   uniforms, storage, (unsigned long long)ex->ubo[stage][0].addr, (unsigned long long)ex->ubo[stage][0].size);
+            if (stage >= 6) {
+                descriptor_state(ex);
+                vk_texture_lock();
+                for (int slot = 0; slot < 32; slot++) if (ex->tex[stage][slot])
+                    rt_log("mesh: texture context stage %d slot %d handle %#llx type %u", stage, slot,
+                           (unsigned long long)ex->tex[stage][slot], sampled_type_of_handle(ex, ex->tex[stage][slot]));
+                vk_texture_unlock();
+            }
         }
         break;
     }

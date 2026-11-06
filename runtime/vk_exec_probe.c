@@ -949,7 +949,6 @@ static void mesh_probe_work(VkExec *ex, void *context) {
     vkCmdSetViewportWithCount(ex->cb, 1, &viewport);
     vkCmdSetScissorWithCount(ex->cb, 1, &scissor);
     vkCmdSetDepthBias(ex->cb, 0, 0, 0);
-    vkCmdSetLineWidth(ex->cb, 1);
     vkCmdSetStencilCompareMask(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, ~0u);
     vkCmdSetStencilWriteMask(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, ~0u);
     vkCmdSetStencilReference(ex->cb, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
@@ -988,6 +987,16 @@ int probe_vkmesh(void) {
     VkCtx *c = vk_ctx();
     VkPipelineLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     CHECK(vkCreatePipelineLayout(c->device, &li, NULL, &p.layout) == VK_SUCCESS, "mesh probe layout");
+    VkPipeState key_state = {0};
+    uint8_t mesh_key[32], changed_key[32];
+    CHECK(vk_pipeline_mesh_key(&key_state, mesh_key), "mesh pipeline key");
+    key_state.vattr[0] = 0x12345678;
+    key_state.vstream[0].stride = 32;
+    CHECK(vk_pipeline_mesh_key(&key_state, changed_key) && !memcmp(mesh_key, changed_key, sizeof mesh_key),
+          "unused vertex inputs changed a mesh pipeline key");
+    key_state.samples = 2;
+    CHECK(vk_pipeline_mesh_key(&key_state, changed_key) && memcmp(mesh_key, changed_key, sizeof mesh_key),
+          "static sample count did not change a mesh pipeline key");
     int variants = c->has_task_shader ? 2 : 1;
     uint8_t *pixels = malloc(TEX_W * TEX_H * 4);
     CHECK(pixels, "mesh pixel buffer");
