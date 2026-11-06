@@ -3081,7 +3081,8 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
     vk_texture_lock();
     for (uint32_t i = 0; i < info->n_bindings; i++) {
         const VkPipeBinding *b = &info->bindings[i];
-        if (b->kind != GFX_RES_IMG || !b->res || b->res->slot < 0 || b->res->slot >= 32) continue;
+        if (b->kind != GFX_RES_IMG || !b->res || !(b->res->flags & 4) ||
+            b->res->slot < 0 || b->res->slot >= 32) continue;   // TextureUsageFlags.ImageStore
         uint64_t h = ex->img[NVN_STAGE_CS][b->res->slot];
         view_t view;
         int has_view = 0;
@@ -3093,12 +3094,17 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
                      (t->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || t->format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32);
         }
     }
-    // A linear replacement for the tensor network needs colour values, not its packed
-    // integer transport. Use the packing dispatch's unique declared HDR colour input.
-    // Diagnostic only: this bypass omits the packing pass's colour processing and
-    // produces excessive brightness in gameplay. Keep it off in ordinary runs.
+    // The linear replacement cannot consume a tensor network's integer colour transport as ordinary HDR.
+    // Select the unique same-size floating-point colour input of the transport dispatch instead. This is a
+    // resource-topology rule, independent of shader identity: variants with the same contract take the same path.
+    // Ambiguous inputs retain the previous source. This deliberately bypasses network-specific preprocessing;
+    // it is the linear fallback's approximation, not an emulation of the real tensor network's output.
+    // 0 keeps packed transport for comparisons; 1 enables the same selection explicitly.
     static int unpacked = -1;
-    if (unpacked < 0) unpacked = getenv("OOT_LINEAR_UNPACKED_SOURCE") != NULL;
+    if (unpacked < 0) {
+        const char *value = getenv("OOT_LINEAR_UNPACKED_SOURCE");
+        unpacked = !value || !*value || *value != '0';
+    }
     if (best && packed && unpacked) {
         const VkTexImage *colour = NULL;
         int ambiguous = 0;
@@ -3106,9 +3112,13 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
             const VkPipeBinding *b = &info->bindings[i];
             if (b->kind != GFX_RES_TEX || !b->res || b->res->slot < 0 || b->res->slot >= 32) continue;
             uint64_t handle = ex->tex[NVN_STAGE_CS][b->res->slot];
-            const VkTexImage *input = handle ? vk_texture_by_id_locked(&ex->tex_pool, (int)(handle & 0xfffff), NULL, NULL) : NULL;
-            if (!input || input->image == best->image || input->width != best->width || input->height != best->height ||
-                input->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) continue;
+            view_t input_view;
+            int has_input_view = 0;
+            const VkTexImage *input = handle ? vk_texture_by_id_locked(&ex->tex_pool, (int)(handle & 0xfffff), &input_view, &has_input_view) : NULL;
+            if (!input || input->type != VK_IMAGE_TYPE_2D || input->image == best->image ||
+                input->width != best->width || input->height != best->height ||
+                input->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 ||
+                (has_input_view && input_view.set_format && input_view.format != NVN_FORMAT_R11G11B10F)) continue;
             if (colour && colour->image != input->image) { ambiguous = 1; break; }
             colour = input;
         }
@@ -3116,7 +3126,7 @@ static void upscale_source_note(VkExec *ex, const VkPipeInfo *info) {
             best = colour;
             packed = 0;
             static int told;
-            if (!told++) rt_log("tensor: linear stand-in uses the unpacked HDR colour input");
+            if (!told++) rt_log("tensor: linear stand-in uses the unique colour input before integer tensor transport");
         }
     }
     if (best && ((best->width >= 1280 && best->height >= 720) || packed))

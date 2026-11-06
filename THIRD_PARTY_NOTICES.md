@@ -4,6 +4,7 @@ Code copied or adapted from another project is listed here with its source, the 
 
 | Component | Source and commit | License | Used in |
 |---|---|---|---|
+| OoT linear upscaler source selection and regression fixture, ported on `claude/fog-compare` | https://github.com/Chiuauaa/oot-pc-recomp @ `0e826025c93f` | GPL-3.0-or-later; original TotK runtime portions retain their MIT terms | `runtime/vk_exec_draw.c::upscale_source_note`, `tests/oot_upscale_source_test.py` |
 | Lichii standalone task/mesh shader compiler (Eden/yuzu lineage) | https://github.com/zortos293/Lichii @ `9b1a32dbb160d2d55ad1409961e87ec4a1256711`, Copyright 2026 Eden Emulator Project and yuzu contributors; original file headers retained in the read-only checkout | GPL-3.0-or-later and GPL-2.0-or-later, combined under GPL-3.0-or-later | `tools/mesh/` adapter and `tools/build_mesh.py`; upstream `src/shader_recompiler/` and required `src/common/` headers fetched into ignored `refs/lichii-mesh/` |
 | Sirit SPIR-V emitter | https://github.com/eden-emulator/sirit @ `b870b062998244231a4f08004d3b25151732c5c5` (v1.0.5) | MIT | Standalone mesh compiler; read-only sources in ignored `refs/mesh-sirit/` |
 | fmt | https://github.com/fmtlib/fmt @ `407c905e45ad75fc29bf0f9bb7c5c2fd3475976f` (12.1.0) | MIT | Standalone mesh compiler; read-only sources in ignored `refs/mesh-fmt/` |
